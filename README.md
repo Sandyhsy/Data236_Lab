@@ -1,4 +1,4 @@
-# Data236_Lab1
+# Data236_Lab
 
 To run the project, follow the steps:
 1. Download our SQL file and insert into your own MySQL instance.
