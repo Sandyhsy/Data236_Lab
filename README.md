@@ -1,5 +1,8 @@
 # Data236_Lab
 
+First, you have to input the dataset into MongoDB:
+1. run this in terminal: node scripts/seed_mongodb.js
+
 To run the project, follow the steps:
 1. Download our SQL file and insert into your own MySQL instance.
 2. Update “Backend/.env” with your own environment setting and keys.
