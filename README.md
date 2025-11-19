@@ -1,7 +1,8 @@
 # Data236_Lab
 
 First, you have to input the dataset into MongoDB:
-1. run this in terminal: node scripts/seed_mongodb.js
+1. Connect to MongoDB: docker run -d -p 27017:27017 --name airbnb_db mongo:latest
+2. Import data into MongoDB: mongosh "mongodb://localhost:27017" seed_airbnb.js
 
 To run the project, follow the steps:
 1. Download our SQL file and insert into your own MySQL instance.
