@@ -39,8 +39,13 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/data/db
-      - ./seed_airbnb.js:/docker-entrypoint-initdb.d/seed_airbnb.js   
+      - mongo_data:/data/db 
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
 
@@ -51,6 +56,10 @@ services:
       dockerfile: Dockerfile
     container_name: backend_app
     env_file: ./Backend/.env
+    environment:
+      # Use service name 'mongo' for Docker internal networking
+      MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017}
+      MONGO_DB: ${MONGO_DB:-lab2}
     ports:
       - "4000:4000"
     depends_on:
@@ -59,7 +68,7 @@ services:
       redpanda:
         condition: service_started
       mongo:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./Backend:/usr/src/app
       - /usr/src/app/node_modules
