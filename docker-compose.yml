@@ -1,3 +1,4 @@
+# docker-compose.yml  (place at repo root: Data236_Lab1/)
 services:
   db:
     image: mysql:8.0
@@ -5,30 +6,45 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: lab1
+    # use 3307 on host to avoid conflicts with host MySQL
     ports:
       - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./init:/docker-entrypoint-initdb.d    # ✅ mount init scripts
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
-
+  # Kafka (Redpanda) with inside/outside listeners
   redpanda:
     image: redpandadata/redpanda:v23.3.16
     container_name: redpanda
     command: >
       redpanda start
-      --kafka-addr PLAINTEXT://0.0.0.0:9092
-      --advertise-kafka-addr PLAINTEXT://redpanda:9092
+      --kafka-addr INSIDE://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092
+      --advertise-kafka-addr INSIDE://redpanda:9092,OUTSIDE://localhost:19092
       --overprovisioned --smp 1 --memory 1G --reserve-memory 0M --node-id 0
     ports:
-      - "19092:9092"       # host access; containers use redpanda:9092
-      - "9644:9644"
+      - "19092:19092"   # host connects via localhost:19092
+      - "9644:9644"     # admin API
+    restart: unless-stopped
 
+  # MongoDB + auto seeding on first startup
+  mongo:
+    image: mongo:latest
+    container_name: airbnb_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./seed_airbnb.js:/docker-entrypoint-initdb.d/seed_airbnb.js   
+    restart: unless-stopped
+
+
+  # Node backend (Express + mysql2 + kafkajs)
   app:
     build:
       context: ./Backend
@@ -42,12 +58,15 @@ services:
         condition: service_healthy
       redpanda:
         condition: service_started
+      mongo:
+        condition: service_started
     volumes:
       - ./Backend:/usr/src/app
       - /usr/src/app/node_modules
     command: node server.js
     restart: unless-stopped
 
+  # FastAPI agent (LangChain) with hot reload for dev
   agent:
     build:
       context: ./agentic
@@ -61,13 +80,16 @@ services:
         condition: service_started
       db:
         condition: service_healthy
+      mongo:
+        condition: service_started
     ports:
-      - "8000:8000"          # optional (frontend proxies anyway)
+      - "8000:8000"     # optional; frontend proxies anyway
     volumes:
-      - ./agentic:/app       # hot reload
+      - ./agentic:/app
     command: ["bash", "./start.sh"]
     restart: unless-stopped
 
+  # Frontend (React/CRA build served by Nginx)
   frontend:
     build:
       context: ./Frontend
@@ -82,3 +104,4 @@ services:
 
 volumes:
   mysql_data: {}
+  mongo_data: {}
