@@ -1,7 +1,12 @@
-fastapi
-uvicorn
+fastapi>=0.110
+uvicorn[standard]>=0.23
 python-dotenv
-google-generativeai
-langchain
-langchain-google-genai
+langchain>=0.2.10,<0.3
+langchain-core>=0.2.35,<0.3
+langchain-community>=0.2.10,<0.3
+langchain-google-genai>=1.0.7,<2
+google-generativeai>=0.7.2
 httpx
+sqlalchemy
+pydantic>=2,<3
+pydantic-settings>=2,<3

@@ -1,11 +1,84 @@
 services:
+  db:
+    image: mysql:8.0
+    container_name: mysql_db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: lab1
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init:/docker-entrypoint-initdb.d    # ✅ mount init scripts
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+
   redpanda:
     image: redpandadata/redpanda:v23.3.16
+    container_name: redpanda
     command: >
       redpanda start
-      --kafka-addr 0.0.0.0:9092
-      --advertise-kafka-addr 127.0.0.1:9092
+      --kafka-addr PLAINTEXT://0.0.0.0:9092
+      --advertise-kafka-addr PLAINTEXT://redpanda:9092
       --overprovisioned --smp 1 --memory 1G --reserve-memory 0M --node-id 0
     ports:
-      - "9092:9092"
-      - "9644:9644"  
+      - "19092:9092"       # host access; containers use redpanda:9092
+      - "9644:9644"
+
+  app:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: backend_app
+    env_file: ./Backend/.env
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
+    volumes:
+      - ./Backend:/usr/src/app
+      - /usr/src/app/node_modules
+    command: node server.js
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ./agentic
+      dockerfile: Dockerfile
+    container_name: agent
+    env_file: ./agentic/.env
+    depends_on:
+      app:
+        condition: service_started
+      redpanda:
+        condition: service_started
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"          # optional (frontend proxies anyway)
+    volumes:
+      - ./agentic:/app       # hot reload
+    command: ["bash", "./start.sh"]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+    container_name: frontend_app
+    ports:
+      - "3000:80"
+    depends_on:
+      - app
+      - agent
+    restart: unless-stopped
+
+volumes:
+  mysql_data: {}

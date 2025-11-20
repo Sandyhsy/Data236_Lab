@@ -39,5 +39,9 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "@csstools/normalize.css": "^12.1.1",
+    "postcss-normalize": "^13.0.1"
   }
 }
