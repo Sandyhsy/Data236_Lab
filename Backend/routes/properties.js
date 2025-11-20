@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { pool } from "../db.js";
+import { db, getNextSequence } from "../db.js";
 import { requireOwner } from "../middleware/requireOwner.js";
 
 const router = Router();
@@ -14,42 +14,49 @@ router.post("/", requireOwner, async (req, res) => {
   } = req.body;
 
   if (!name) return res.status(400).json({ error: "Name is required" });
-
-  const [result] = await pool.query(
-    `INSERT INTO properties
-     (owner_id, name, type, description, location, amenities, price_per_night, bedrooms, bathrooms, availability_start, availability_end)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      user_id, name || "", type || null, description || null, location || null, amenities || null,
-      price_per_night || null, bedrooms || null, bathrooms || null, availability_start || null, availability_end || null
-    ]
-  );
-  const [rows] = await pool.query("SELECT * FROM properties WHERE property_id = ?", [result.insertId]);
-  res.status(201).json(rows[0]);
+  const property_id = await getNextSequence("propertyid");
+  await db.collection("properties").insertOne({
+    property_id,
+    owner_id: user_id,
+    name: name || "",
+    type: type || null,
+    description: description || null,
+    location: location || null,
+    amenities: amenities || null,
+    price_per_night: price_per_night || null,
+    bedrooms: bedrooms || null,
+    bathrooms: bathrooms || null,
+    availability_start: availability_start ? new Date(availability_start) : null,
+    availability_end: availability_end ? new Date(availability_end) : null,
+    created_at: new Date()
+  });
+  const rows = await db.collection("properties").findOne({ property_id });
+  res.status(201).json(rows);
 });
 
 // GET /api/properties/mine - list my properties (include first image only)
 router.get("/mine", requireOwner, async (req, res) => {
   const { user_id } = req.session.user;
-
-  // select each property plus its first image url (ordered by image_id)
-  const [rows] = await pool.query(
-    `
-    SELECT
-      p.*,
-      (
-        SELECT i.url
-        FROM property_images i
-        WHERE i.property_id = p.property_id
-        ORDER BY i.image_id ASC
-        LIMIT 1
-      ) AS first_image_url
-    FROM properties p
-    WHERE p.owner_id = ?
-    ORDER BY p.created_at DESC
-    `,
-    [user_id]
-  );
+  const rows = await db.collection("properties").aggregate([
+    { $match: { owner_id: user_id } },
+    { $lookup: {
+        from: "property_images",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "images"
+      }
+    },
+    { $addFields: {
+        first_image: { $arrayElemAt: [{ $sortArray: { input: "$images", sortBy: { image_id: 1 } } }, 0] }
+      }
+    },
+    { $addFields: {
+        first_image_url: "$first_image.url"
+      }
+    },
+    { $sort: { created_at: -1 } },
+    { $project: { images: 0 } }
+  ]).toArray();
 
   res.json(rows);
 });
@@ -64,37 +71,37 @@ router.put("/:id", requireOwner, async (req, res) => {
     availability_start, availability_end
   } = req.body;
 
-  const [owned] = await pool.query("SELECT property_id FROM properties WHERE property_id = ? AND owner_id = ?", [id, user_id]);
-  if (owned.length === 0) return res.status(404).json({ error: "Property not found" });
-
-  await pool.query(
-    `UPDATE properties SET
-      name = COALESCE(?, name),
-      type = COALESCE(?, type),
-      description = COALESCE(?, description),
-      location = COALESCE(?, location),
-      amenities = COALESCE(?, amenities),
-      price_per_night = COALESCE(?, price_per_night),
-      bedrooms = COALESCE(?, bedrooms),
-      bathrooms = COALESCE(?, bathrooms),
-      availability_start = COALESCE(?, availability_start),
-      availability_end = COALESCE(?, availability_end)
-     WHERE property_id = ?`,
-    [name, type, description, location, amenities, price_per_night, bedrooms, bathrooms, availability_start, availability_end, id]
+  const owned = await db.collection("properties").findOne({ property_id: parseInt(id), owner_id: user_id });
+  if (!owned) return res.status(404).json({ error: "Property not found" });
+  const updateFields = {};
+  if (name !== undefined) updateFields.name = name;
+  if (type !== undefined) updateFields.type = type;
+  if (description !== undefined) updateFields.description = description;
+  if (location !== undefined) updateFields.location = location;
+  if (amenities !== undefined) updateFields.amenities = amenities;
+  if (price_per_night !== undefined) updateFields.price_per_night = price_per_night;
+  if (bedrooms !== undefined) updateFields.bedrooms = bedrooms;
+  if (bathrooms !== undefined) updateFields.bathrooms = bathrooms;
+  if (availability_start !== undefined) updateFields.availability_start = availability_start ? new Date(availability_start) : null;
+  if (availability_end !== undefined) updateFields.availability_end = availability_end ? new Date(availability_end) : null;
+  
+  await db.collection("properties").updateOne(
+    { property_id: parseInt(id) },
+    { $set: updateFields }
   );
 
-  const [rows] = await pool.query("SELECT * FROM properties WHERE property_id = ?", [id]);
-  res.json(rows[0]);
+  const rows = await db.collection("properties").findOne({ property_id: parseInt(id) });
+  res.json(rows);
 });
 
 // DELETE /api/properties/:id - delete if owned
 router.delete("/:id", requireOwner, async (req, res) => {
   const { user_id } = req.session.user;
   const { id } = req.params;
-  const [owned] = await pool.query("SELECT property_id FROM properties WHERE property_id = ? AND owner_id = ?", [id, user_id]);
-  if (owned.length === 0) return res.status(404).json({ error: "Property not found" });
+  const owned = await db.collection("properties").findOne({ property_id: parseInt(id), owner_id: user_id });
+  if (!owned) return res.status(404).json({ error: "Property not found" });
 
-  await pool.query("DELETE FROM properties WHERE property_id = ?", [id]);
+  await db.collection("properties").deleteOne({ property_id: parseInt(id) });
   res.json({ message: "Property deleted" });
 });
 
@@ -104,16 +111,12 @@ router.get("/:id/images", requireOwner, async (req, res) => {
   const { id } = req.params;
 
   // Verify ownership
-  const [owns] = await pool.query(
-    "SELECT property_id FROM properties WHERE property_id = ? AND owner_id = ?",
-    [id, user_id]
-  );
-  if (owns.length === 0) return res.status(404).json({ error: "Property not found" });
-
-  const [rows] = await pool.query(
-    "SELECT image_id, url, created_at FROM property_images WHERE property_id = ? ORDER BY image_id ASC",
-    [id]
-  );
+  const owns = await db.collection("properties").findOne({ property_id: parseInt(id), owner_id: user_id });
+  if (!owns) return res.status(404).json({ error: "Property not found" });
+  const rows = await db.collection("property_images").find(
+    { property_id: parseInt(id) },
+    { projection: { image_id: 1, url: 1, created_at: 1 } }
+  ).sort({ image_id: 1 }).toArray();
   res.json(rows);
 });
 
@@ -123,37 +126,21 @@ router.get("/:id", async (req, res) => {
   const { id } = req.params;
 
   try {
-    // first_image_url + all images via GROUP_CONCAT
-    const [rows] = await pool.query(
-      `
-      SELECT
-        p.*,
-        (
-          SELECT i.url
-          FROM property_images i
-          WHERE i.property_id = p.property_id
-          ORDER BY i.image_id ASC
-          LIMIT 1
-        ) AS first_image_url,
-        (
-          SELECT GROUP_CONCAT(ii.url ORDER BY ii.image_id ASC SEPARATOR '||')
-          FROM property_images ii
-          WHERE ii.property_id = p.property_id
-        ) AS photos_csv
-      FROM properties p
-      WHERE p.property_id = ?
-      `,
-      [id]
-    );
+    const property = await db.collection("properties").findOne({ property_id: parseInt(id) });
+    if (!property) return res.status(404).json({ error: "Property not found" });
 
-    if (rows.length === 0) return res.status(404).json({ error: "Property not found" });
+    const images = await db.collection("property_images").find(
+      { property_id: parseInt(id) },
+      { projection: { url: 1 } }
+    ).sort({ image_id: 1 }).toArray();
+    
+    const photos = images.map(img => img.url);
+    const first_image_url = photos.length > 0 ? photos[0] : null;
 
     // normalize photos_csv to an array
-    const row = rows[0];
-    const photos = row.photos_csv ? row.photos_csv.split("||") : [];
-    delete row.photos_csv;
+    const row = { ...property, first_image_url, photos };
 
-    res.json({ ...row, photos });
+    res.json(row);
   } catch (err) {
     console.error("[GET /api/properties/:id] error:", err);
     res.status(500).json({ error: "Failed to load property" });
@@ -172,38 +159,33 @@ router.put("/:id/images", requireOwner, async (req, res) => {
   }
 
   // Verify ownership
-  const [owns] = await pool.query(
-    "SELECT property_id FROM properties WHERE property_id = ? AND owner_id = ?",
-    [id, user_id]
-  );
-  if (owns.length === 0) return res.status(404).json({ error: "Property not found" });
+  const owns = await db.collection("properties").findOne({ property_id: parseInt(id), owner_id: user_id });
+  if (!owns) return res.status(404).json({ error: "Property not found" });
 
-  const conn = await pool.getConnection();
   try {
-    await conn.beginTransaction();
-    await conn.query("DELETE FROM property_images WHERE property_id = ?", [id]);
+    await db.collection("property_images").deleteMany({ property_id: parseInt(id) });
 
     if (urls.length > 0) {
-      const values = urls.map(u => [id, u]);
-      await conn.query(
-        "INSERT INTO property_images (property_id, url) VALUES ?",
-        [values]
-      );
+      const imageDocs = [];
+      for (const url of urls) {
+        const image_id = await getNextSequence("imageid");
+        imageDocs.push({
+          image_id,
+          property_id: parseInt(id),
+          url,
+          created_at: new Date()
+        });
+      }
+      await db.collection("property_images").insertMany(imageDocs);
     }
-
-    await conn.commit();
-
-    const [rows] = await pool.query(
-      "SELECT image_id, url, created_at FROM property_images WHERE property_id = ? ORDER BY image_id ASC",
-      [id]
-    );
+    const rows = await db.collection("property_images").find(
+      { property_id: parseInt(id) },
+      { projection: { image_id: 1, url: 1, created_at: 1 } }
+    ).sort({ image_id: 1 }).toArray();
     res.json(rows);
   } catch (e) {
-    await conn.rollback();
     console.error(e);
     res.status(500).json({ error: "Failed to update images" });
-  } finally {
-    conn.release();
   }
 });
 
