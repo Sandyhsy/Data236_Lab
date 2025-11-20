@@ -6,7 +6,8 @@ export default function HistoryCard({ b }) {
   if (!b) return null;
 
   const nightly = Number(b.nightly_price ?? 0);
-  const nights = Number(b.nights ?? 0);
+  const nights = Math.ceil(Number(b.nights ?? 0)); // Round up to whole nights
+  const totalPrice = nightly * nights; // Recalculate using rounded nights
   const showBreakdown = nightly > 0 && nights > 0;
 
   const start = new Date(b.start_date);
@@ -60,7 +61,7 @@ export default function HistoryCard({ b }) {
         {/* Secondary line for clarity on total */}
         {showBreakdown && (
           <div className="mt-2 badge text-bg-danger">
-            Total price <span className="fw-semibold">${b.total_price}</span>
+            Total price <span className="fw-semibold">${totalPrice.toFixed(2)}</span>
           </div>
         )}
       </div>
