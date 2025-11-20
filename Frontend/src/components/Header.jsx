@@ -65,28 +65,30 @@ export default function Header({ user, onLogout }) {
                 </li>
               </>
             ) : (
-              // Logged out
-              <>
-                {amTraveler ? (
-                  <>
-                    <li className="nav-item">
-                      <NavLink to="/traveler/login" className="nav-link">Login</NavLink>
-                    </li>
-                    <li className="nav-item">
-                      <NavLink to="/traveler/signup" className="nav-link">Sign up</NavLink>
-                    </li>
-                  </>
-                ) : (
-                  <>
-                    <li className="nav-item">
-                      <NavLink to="/login" className="nav-link">Login</NavLink>
-                    </li>
-                    <li className="nav-item">
-                      <NavLink to="/signup" className="nav-link">Sign up</NavLink>
-                    </li>
-                  </>
-                )}
-              </>
+              // Logged out - hide Login and Sign up on homepage
+              path !== "/" && (
+                <>
+                  {amTraveler ? (
+                    <>
+                      <li className="nav-item">
+                        <NavLink to="/traveler/login" className="nav-link">Login</NavLink>
+                      </li>
+                      <li className="nav-item">
+                        <NavLink to="/traveler/signup" className="nav-link">Sign up</NavLink>
+                      </li>
+                    </>
+                  ) : (
+                    <>
+                      <li className="nav-item">
+                        <NavLink to="/login" className="nav-link">Login</NavLink>
+                      </li>
+                      <li className="nav-item">
+                        <NavLink to="/signup" className="nav-link">Sign up</NavLink>
+                      </li>
+                    </>
+                  )}
+                </>
+              )
             )}
           </ul>
         </div>
