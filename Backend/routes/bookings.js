@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { pool } from "../db.js";
+import { db, getNextSequence } from "../db.js";
 import { requireOwner } from "../middleware/requireOwner.js";
 import { producer } from "../server.js";
 
@@ -7,99 +7,169 @@ const router = Router();
 
 router.get("/", async (req, res) => {
   const { user_id } = req.session.user;
-  const [bookHistory] = await pool.query(
-    `
-    SELECT b.booking_id, b.traveler_id, b.property_id, b.start_date, b.end_date, b.guests, b.status, b.created_at,
-    p.name AS property_name,
-    (
-      SELECT i.url
-      FROM property_images i
-      WHERE i.property_id = p.property_id
-      ORDER BY i.image_id ASC
-      LIMIT 1
-    ) AS first_image_url
-    FROM bookings b
-    JOIN properties p ON b.property_id = p.property_id
-    WHERE b.traveler_id = ? AND b.status = 'ACCEPTED' AND DATE(end_date) < CURDATE()
-    ORDER BY b.created_at DESC;
-    `,
-    [user_id]
-  );
-  console.log("bookings fetched:", bookHistory);
-  res.json(bookHistory)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const bookings = await db.collection("bookings").aggregate([
+    { $match: { traveler_id: user_id, status: "ACCEPTED" } },
+    { $lookup: {
+        from: "properties",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "property"
+      }
+    },
+    { $unwind: "$property" },
+    { $lookup: {
+        from: "property_images",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "images"
+      }
+    },
+    { $addFields: {
+        first_image_url: { $arrayElemAt: [{ $sortArray: { input: "$images", sortBy: { image_id: 1 } } }, 0] }
+      }
+    },
+    { $addFields: {
+        property_name: "$property.name",
+        first_image_url: "$first_image_url.url"
+      }
+    },
+    { $match: { end_date: { $lt: today } } },
+    { $sort: { created_at: -1 } },
+    { $project: {
+        booking_id: 1, traveler_id: 1, property_id: 1, start_date: 1, end_date: 1,
+        guests: 1, status: 1, created_at: 1, property_name: 1, first_image_url: 1
+      }
+    }
+  ]).toArray();
+  res.json(bookings)
 })
 
 router.get("/status", async (req, res) => {
   const { user_id } = req.session.user;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const acceptedRequests = await db.collection("bookings").aggregate([
+    { $match: { traveler_id: user_id, status: "ACCEPTED" } },
+    { $lookup: {
+        from: "properties",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "property"
+      }
+    },
+    { $unwind: "$property" },
+    { $lookup: {
+        from: "property_images",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "images"
+      }
+    },
+    { $addFields: {
+        first_image: { $arrayElemAt: [{ $sortArray: { input: "$images", sortBy: { image_id: 1 } } }, 0] },
+        nights: { $max: [1, { $ceil: { $divide: [{ $subtract: ["$end_date", "$start_date"] }, 86400000] } }] }
+      }
+    },
+    { $addFields: {
+        property_name: "$property.name",
+        nightly_price: "$property.price_per_night",
+        first_image_url: "$first_image.url",
+        total_price: { $multiply: ["$nights", "$property.price_per_night"] }
+      }
+    },
+    { $match: { start_date: { $gte: today } } },
+    { $sort: { created_at: -1 } },
+    { $project: {
+        booking_id: 1, traveler_id: 1, property_id: 1, start_date: 1, end_date: 1,
+        guests: 1, status: 1, created_at: 1, property_name: 1, nightly_price: 1,
+        nights: 1, total_price: 1, first_image_url: 1
+      }
+    }
+  ]).toArray();
 
-  const [acceptedRequests] = await pool.query(
-    `
-    SELECT b.booking_id, b.traveler_id, b.property_id, b.start_date, b.end_date, b.guests, b.status, b.created_at,
-    p.name AS property_name, 
-    p.price_per_night AS nightly_price,
-    GREATEST(1, DATEDIFF(b.end_date, b.start_date)) AS nights,
-    (GREATEST(1, DATEDIFF(b.end_date, b.start_date)) * p.price_per_night) AS total_price,
-    (
-      SELECT i.url
-      FROM property_images i
-      WHERE i.property_id = p.property_id
-      ORDER BY i.image_id ASC
-      LIMIT 1
-    ) AS first_image_url
-    FROM bookings b
-    JOIN properties p ON b.property_id = p.property_id
-    WHERE b.traveler_id = ? 
-      and b.status = 'ACCEPTED' 
-      and DATE(start_date) >= CURDATE()
-    ORDER BY b.created_at DESC;
-    `,
-    [user_id]
-  );
+  const canceledRequests = await db.collection("bookings").aggregate([
+    { $match: { traveler_id: user_id, status: "CANCELLED" } },
+    { $lookup: {
+        from: "properties",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "property"
+      }
+    },
+    { $unwind: "$property" },
+    { $lookup: {
+        from: "property_images",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "images"
+      }
+    },
+    { $addFields: {
+        first_image: { $arrayElemAt: [{ $sortArray: { input: "$images", sortBy: { image_id: 1 } } }, 0] },
+        nights: { $max: [1, { $ceil: { $divide: [{ $subtract: ["$end_date", "$start_date"] }, 86400000] } }] }
+      }
+    },
+    { $addFields: {
+        property_name: "$property.name",
+        nightly_price: "$property.price_per_night",
+        first_image_url: "$first_image.url",
+        total_price: { $multiply: ["$nights", "$property.price_per_night"] }
+      }
+    },
+    { $sort: { created_at: -1 } },
+    { $project: {
+        booking_id: 1, traveler_id: 1, property_id: 1, start_date: 1, end_date: 1,
+        guests: 1, status: 1, created_at: 1, property_name: 1, nightly_price: 1,
+        nights: 1, total_price: 1, first_image_url: 1
+      }
+    }
+  ]).toArray();
 
-  const [canceledRequests] = await pool.query(
-    `
-    SELECT b.booking_id, b.traveler_id, b.property_id, b.start_date, b.end_date, b.guests, b.status, b.created_at,
-    p.name AS property_name,
-    p.price_per_night AS nightly_price,
-    GREATEST(1, DATEDIFF(b.end_date, b.start_date)) AS nights,
-    (GREATEST(1, DATEDIFF(b.end_date, b.start_date)) * p.price_per_night) AS total_price,
-    (
-      SELECT i.url
-      FROM property_images i
-      WHERE i.property_id = p.property_id
-      ORDER BY i.image_id ASC
-      LIMIT 1
-    ) AS first_image_url
-    FROM bookings b
-    JOIN properties p ON b.property_id = p.property_id
-    WHERE b.traveler_id = ? and b.status = 'CANCELLED'
-    ORDER BY b.created_at DESC;
-    `,
-    [user_id]
-  );
-
-
-  const [pendingRequests] = await pool.query(
-    `
-    SELECT b.booking_id, b.traveler_id, b.property_id, b.start_date, b.end_date, b.guests, b.status, b.created_at,
-    p.name AS property_name,
-    p.price_per_night AS nightly_price,
-    GREATEST(1, DATEDIFF(b.end_date, b.start_date)) AS nights,
-    (GREATEST(1, DATEDIFF(b.end_date, b.start_date)) * p.price_per_night) AS total_price,
-    (
-      SELECT i.url
-      FROM property_images i
-      WHERE i.property_id = p.property_id
-      ORDER BY i.image_id ASC
-      LIMIT 1
-    ) AS first_image_url
-    FROM bookings b
-    JOIN properties p ON b.property_id = p.property_id
-    WHERE b.traveler_id = ? and b.status = 'PENDING'
-    ORDER BY b.created_at DESC;
-    `,
-    [user_id]
-  );
+  // Pending requests: only show bookings with start_date >= today (including today)
+  const pendingRequests = await db.collection("bookings").aggregate([
+    { $match: { 
+        traveler_id: user_id, 
+        status: "PENDING",
+        start_date: { $gte: today }
+      }
+    },
+    { $lookup: {
+        from: "properties",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "property"
+      }
+    },
+    { $unwind: "$property" },
+    { $lookup: {
+        from: "property_images",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "images"
+      }
+    },
+    { $addFields: {
+        first_image: { $arrayElemAt: [{ $sortArray: { input: "$images", sortBy: { image_id: 1 } } }, 0] },
+        nights: { $max: [1, { $ceil: { $divide: [{ $subtract: ["$end_date", "$start_date"] }, 86400000] } }] }
+      }
+    },
+    { $addFields: {
+        property_name: "$property.name",
+        nightly_price: "$property.price_per_night",
+        first_image_url: "$first_image.url",
+        total_price: { $multiply: ["$nights", "$property.price_per_night"] }
+      }
+    },
+    { $sort: { created_at: -1 } },
+    { $project: {
+        booking_id: 1, traveler_id: 1, property_id: 1, start_date: 1, end_date: 1,
+        guests: 1, status: 1, created_at: 1, property_name: 1, nightly_price: 1,
+        nights: 1, total_price: 1, first_image_url: 1
+      }
+    }
+  ]).toArray();
 
   res.json({
     acceptedRequests: Array.isArray(acceptedRequests) ? acceptedRequests : [],
@@ -118,55 +188,72 @@ router.post("/", async (req, res) => {
   const startDate = new Date(start_date);
   const endDate = new Date(end_date);
 
-  const [booking] = await pool.query(
-    `INSERT INTO bookings  (traveler_id, property_id, start_date, end_date, guests, status) values (?,?,?,?,?,?)`,
-    [user_id, property_id, startDate, endDate, guests, 'PENDING']
-  );
+  const booking_id = await getNextSequence("bookingid");
+  await db.collection("bookings").insertOne({
+    booking_id,
+    traveler_id: user_id,
+    property_id,
+    start_date: startDate,
+    end_date: endDate,
+    guests: guests || null,
+    status: "PENDING",
+    created_at: new Date()
+  });
 
       const bookingEvent = {
-        booking_id: booking.insertId,
+        booking_id: booking_id,
         status: "PENDING",
       };
         await producer.send({
         topic: "booking_req",
-        messages: [{ key: String(booking.insertId), value: JSON.stringify(bookingEvent) }],
+        messages: [{ key: String(booking_id), value: JSON.stringify(bookingEvent) }],
       });
 
-  res.json(booking)
+  res.json({ insertId: booking_id })
 })
 
 
 // GET /api/bookings/incoming - bookings for properties owned by the owner
 router.get("/incoming", requireOwner, async (req, res) => {
   const { user_id } = req.session.user;
-  const [rows] = await pool.query(
-    `SELECT b.booking_id, b.traveler_id, b.property_id, b.start_date, b.end_date, b.guests, b.status, b.created_at,
-            p.name AS property_name
-     FROM bookings b
-     JOIN properties p ON b.property_id = p.property_id
-     WHERE p.owner_id = ?
-     ORDER BY b.created_at DESC`,
-    [user_id]
-  );
+
+  const rows = await db.collection("bookings").aggregate([
+    { $lookup: {
+        from: "properties",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "property"
+      }
+    },
+    { $unwind: "$property" },
+    { $match: { "property.owner_id": user_id } },
+    { $addFields: { property_name: "$property.name" } },
+    { $sort: { created_at: -1 } },
+    { $project: {
+        booking_id: 1, traveler_id: 1, property_id: 1, start_date: 1, end_date: 1,
+        guests: 1, status: 1, created_at: 1, property_name: 1
+      }
+    }
+  ]).toArray();
   res.json(rows);
 });
 
 // Helper: ensure booking belongs to owner's property
 async function getOwnedBooking(bookingId, ownerId) {
-  const [rows] = await pool.query(
-    `SELECT b.*, p.owner_id
-     FROM bookings b
-     JOIN properties p ON b.property_id = p.property_id
-     WHERE b.booking_id = ? AND p.owner_id = ?`,
-    [bookingId, ownerId]
-  );
-  return rows[0];
+
+  const booking = await db.collection("bookings").findOne({ booking_id: parseInt(bookingId) });
+  if (!booking) return null;
+  const property = await db.collection("properties").findOne({ property_id: booking.property_id });
+  if (!property || property.owner_id !== ownerId) return null;
+  return { ...booking, owner_id: property.owner_id };
 }
 
 export function updateBookingKafka(subscribeKafka) {
   subscribeKafka("booking_stat", async (evt) => {
-    await pool.query("UPDATE bookings SET status = ? WHERE booking_id = ?", [evt.status, evt.booking_id]);
-    console.log(`Booking update: ${evt.booking_id} status to ${evt.status} with Kafka`);
+    await db.collection("bookings").updateOne(
+      { booking_id: parseInt(evt.booking_id) },
+      { $set: { status: evt.status } }
+    );
   });
 }
 
@@ -179,22 +266,17 @@ router.patch("/:id/accept", requireOwner, async (req, res) => {
   if (!booking) return res.status(404).json({ error: "Booking not found" });
   if (booking.status === "ACCEPTED") return res.json({ message: "Already accepted" });
 
-  // Check overlap with other ACCEPTED bookings
-  const [conflicts] = await pool.query(
-    `SELECT COUNT(*) AS c
-     FROM bookings
-     WHERE property_id = ?
-       AND status = 'ACCEPTED'
-       AND NOT (end_date <= ? OR start_date >= ?)`,
-    // [booking.property_id, booking.start_date, booking.end_date]
-    [booking.property_id, booking.start_date, booking.end_date]
-  );
-  if (conflicts[0].c > 0) {
+  const conflicts = await db.collection("bookings").countDocuments({
+    property_id: booking.property_id,
+    status: "ACCEPTED",
+    booking_id: { $ne: parseInt(id) },
+    end_date: { $gt: booking.start_date },
+    start_date: { $lt: booking.end_date }
+  });
+  if (conflicts > 0) {
     return res.status(409).json({ error: "Date conflict with an existing accepted booking" });
   }
 
-  // await pool.query("UPDATE bookings SET status = 'ACCEPTED' WHERE booking_id = ?", [id]);
-  
   await producer.send({
     topic: "booking_stat",
     messages: 
@@ -217,8 +299,6 @@ router.patch("/:id/cancel", requireOwner, async (req, res) => {
   const booking = await getOwnedBooking(id, user_id);
   if (!booking) return res.status(404).json({ error: "Booking not found" });
 
-  // await pool.query("UPDATE bookings SET status = 'CANCELLED' WHERE booking_id = ?", [id]);
-
   await producer.send({
     topic: "booking_stat",
     messages: 
@@ -235,7 +315,10 @@ router.patch("/:id/cancel", requireOwner, async (req, res) => {
 router.get("/bookedDates/:id", async (req, res) => {
   const { id } = req.params;
 
-  const [rows] = await pool.query("SELECT start_date, end_date FROM bookings WHERE property_id = ?", [id]);
+  const rows = await db.collection("bookings").find(
+    { property_id: parseInt(id) },
+    { projection: { start_date: 1, end_date: 1 } }
+  ).toArray();
 
   if (rows.length === 0) {
     return res.json([]);
@@ -247,9 +330,6 @@ router.get("/bookedDates/:id", async (req, res) => {
     }
   }
   )
-
-
-
 
   res.json(intervals);
 
