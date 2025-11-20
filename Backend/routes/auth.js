@@ -1,6 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcrypt";
-import { pool } from "../db.js";
+import { db, getNextSequence } from "../db.js";
 
 const router = Router();
 
@@ -11,22 +11,34 @@ router.post("/signup", async (req, res) => {
     if (!name || !email || !password) {
       return res.status(400).json({ error: "Missing required fields" });
     }
-    const [exists] = await pool.query("SELECT user_id FROM users WHERE email = ?", [email]);
-    if (exists.length > 0) {
+    const exists = await db.collection("users").findOne({ email });
+    if (exists) {
       return res.status(409).json({ error: "Email already in use" });
     }
     const hash = await bcrypt.hash(password, 10);
-    const [result] = await pool.query(
-      `INSERT INTO users (role, name, email, password_hash, city, country)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [role, name, email, hash, city || null, country || null]
-    );
+    const user_id = await getNextSequence("userid");
+    await db.collection("users").insertOne({
+      user_id,
+      role: role || "traveler",
+      name,
+      email,
+      password_hash: hash,
+      city: city || null,
+      country: country || null,
+      phone: null,
+      about_me: null,
+      languages: null,
+      gender: null,
+      profile_picture: null,
+      created_at: new Date()
+    });
     // Start session
-    req.session.user = { user_id: result.insertId, role: role, name, email };
-    res.status(201).json({ message: "Owner created", user: req.session.user });
+    req.session.user = { user_id: user_id, role: role || "traveler", name, email };
+    const message = role === "owner" ? "Owner created" : "Traveler created";
+    res.status(201).json({ message: message, user: req.session.user });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Signup failed" });
+    console.error("Signup error:", err);
+    res.status(500).json({ error: "Signup failed: " + (err.message || "Internal server error") });
   }
 });
 
@@ -34,13 +46,8 @@ router.post("/signup", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { email, password, role } = req.body;
-    const [rows] = await pool.query(
-      "SELECT user_id, role, name, email, password_hash FROM users WHERE email = ? AND role = ?",
-      [email, role]
-    );
-    if (rows.length === 0) return res.status(401).json({ error: "Invalid credentials" });
-
-    const user = rows[0];
+    const user = await db.collection("users").findOne({ email, role });
+    if (!user) return res.status(401).json({ error: "Invalid credentials" });
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
