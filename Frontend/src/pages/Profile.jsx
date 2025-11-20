@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { CountryDropdown, RegionDropdown } from "react-country-region-selector";
 
+const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const MAX_SIZE = 25 * 1024 * 1024;
 
 export default function Profile() {
   const fileRef = useRef(null);
@@ -12,9 +14,9 @@ export default function Profile() {
     about_me: "",
     country: "",
     city: "",
-    languages: "",       // now a plain comma-separated string
-    gender: "",          // free text input
-    profile_picture: ""
+    languages: "",
+    gender: "",
+    profile_picture: "",
   });
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState("");
@@ -30,42 +32,83 @@ export default function Profile() {
         about_me: u.about_me || "",
         country: u.country || "",
         city: u.city || "",
-        languages: u.languages || "",  // keep whatever is stored (string)
+        languages: u.languages || "",
         gender: u.gender || "",
-        profile_picture: u.profile_picture || ""
+        profile_picture: u.profile_picture || "",
       });
     }
     init();
   }, []);
 
+  function validateFile(file) {
+    if (file.size > MAX_SIZE) {
+      setUploadErr("File size must be less than 25MB");
+      return false;
+    }
+    if (!ALLOWED_MIME.includes(file.type)) {
+      setUploadErr("Unsupported image format. Use JPG, PNG, WEBP, or GIF.");
+      return false;
+    }
+    setUploadErr("");
+    return true;
+  }
+  const PUT_TIMEOUT_MS = 45000; // 45s; adjust if needed
+  async function putWithTimeout(url, file, contentType) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort("timeout"), PUT_TIMEOUT_MS);
+    try {
+      return await fetch(url, {
+        method: "PUT",
+        headers: { "Content-Type": contentType },
+        body: file,
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
   async function handleUploadProfile(fileList) {
-    if (!fileList || fileList.length === 0) return;
+    if (!fileList || !fileList.length) return;
     const file = fileList[0];
+    if (!validateFile(file)) return;
+  
     setUploading(true);
     setUploadErr("");
     try {
       const presign = await api.presignProfileUpload({
         filename: file.name,
-        contentType: file.type || "application/octet-stream"
+        contentType: file.type || "image/jpeg",
       });
-
-      const putRes = await fetch(presign.uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-        body: file
-      });
-      if (!putRes.ok) throw new Error(`S3 PUT failed ${putRes.status}`);
-
-      // Update preview with the new URL
-      setForm(prev => ({ ...prev, profile_picture: presign.publicUrl }));
+      if (!presign?.uploadUrl) throw new Error("Failed to get upload URL");
+  
+      const contentTypeToUse = presign.contentType || file.type || "image/jpeg";
+  
+      // Try direct PUT with timeout
+      const putRes = await putWithTimeout(presign.uploadUrl, file, contentTypeToUse);
+      if (!putRes.ok) {
+        const body = await putRes.text().catch(() => "");
+        throw new Error(`S3 upload failed: ${putRes.status} ${putRes.statusText}${body ? ` - ${body}` : ""}`);
+      }
+  
+      // Success: show preview; save to DB later
+      setForm((prev) => ({ ...prev, profile_picture: presign.publicUrl }));
       setMsg("Profile image uploaded. Remember to Save changes.");
+  
     } catch (e) {
-      console.error(e);
-      setUploadErr(e.message || "Upload failed");
+      // Fallback to proxy to avoid CORS/PUT stalls
+      try {
+        const prox = await api.proxyProfileUpload(file);
+        setForm((prev) => ({ ...prev, profile_picture: prox.publicUrl }));
+        setMsg("Profile image uploaded via proxy. Remember to Save changes.");
+      } catch (e2) {
+        setUploadErr(e?.message || e2?.message || "Upload failed. Please try again.");
+      }
     } finally {
       setUploading(false);
     }
   }
+  
 
   async function save(e) {
     e.preventDefault();
@@ -76,12 +119,11 @@ export default function Profile() {
       about_me: form.about_me || null,
       country: form.country || null,
       city: form.city || null,
-      // backend accepts a string for languages (comma-separated)
       languages: form.languages || null,
       gender: form.gender || null,
-      profile_picture: form.profile_picture || null
+      profile_picture: form.profile_picture || null,
     };
-    await api.profileUpdate(payload)
+    await api.profileUpdate(payload);
     setMsg("Saved");
   }
 
@@ -105,7 +147,7 @@ export default function Profile() {
                 ref={fileRef}
                 type="file"
                 className="d-none"
-                accept="image/*"
+                accept={ALLOWED_MIME.join(",")}
                 onChange={(e) => {
                   if (e.target.files?.length) handleUploadProfile(e.target.files);
                   e.target.value = "";
@@ -135,7 +177,7 @@ export default function Profile() {
                     <input
                       className="form-control"
                       value={form.name}
-                      onChange={e=>setForm({...form, name:e.target.value})}
+                      onChange={(e) => setForm({ ...form, name: e.target.value })}
                     />
                   </div>
                   <div className="col-md-6">
@@ -145,8 +187,8 @@ export default function Profile() {
                       type="tel"
                       value={form.phone}
                       inputMode="numeric"
-                      pattern="^\d{10}$"
-                      onChange={e=>setForm({...form, phone:e.target.value})}
+                      pattern="[0-9]{10}"
+                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
                     />
                   </div>
 
@@ -156,35 +198,37 @@ export default function Profile() {
                       className="form-control"
                       rows={3}
                       value={form.about_me}
-                      onChange={e=>setForm({...form, about_me:e.target.value})}
+                      onChange={(e) => setForm({ ...form, about_me: e.target.value })}
                     />
-                  </div>                      
+                  </div>
+
                   <div className="col-md-6">
                     <label className="form-label">Country</label>
-                      <CountryDropdown
-                        value={form.country}
-                        onChange={(val) => setForm(prev => ({ ...prev, country: val, city: "" }))}
-                        className="form-select"
-                      />
+                    <CountryDropdown
+                      value={form.country}
+                      onChange={(val) => setForm((prev) => ({ ...prev, country: val, city: "" }))}
+                      className="form-select"
+                    />
                   </div>
-                    <div className="col-md-6">
+                  <div className="col-md-6">
                     <label className="form-label">City</label>
-                      <RegionDropdown
-                        country={form.country}
-                        value={form.city}
-                        onChange={(val) => setForm(prev => ({ ...prev, city: val }))}
-                        className="form-select"
-                        valueType="short"         
-                        labelType="short"         
-                        disableWhenEmpty
-                      />
+                    <RegionDropdown
+                      country={form.country}
+                      value={form.city}
+                      onChange={(val) => setForm((prev) => ({ ...prev, city: val }))}
+                      className="form-select"
+                      valueType="short"
+                      labelType="short"
+                      disableWhenEmpty
+                    />
                   </div>
+
                   <div className="col-md-6">
                     <label className="form-label">Gender</label>
                     <input
                       className="form-control"
                       value={form.gender}
-                      onChange={e=>setForm({...form, gender:e.target.value})}
+                      onChange={(e) => setForm({ ...form, gender: e.target.value })}
                       placeholder="female, male, or don't want to tell"
                     />
                   </div>
@@ -194,7 +238,7 @@ export default function Profile() {
                     <input
                       className="form-control"
                       value={form.languages}
-                      onChange={e=>setForm({...form, languages:e.target.value})}
+                      onChange={(e) => setForm({ ...form, languages: e.target.value })}
                       placeholder="Comma separated, e.g., English, Mandarin"
                     />
                   </div>
