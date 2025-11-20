@@ -1,25 +1,50 @@
 import { Router } from "express";
-import { pool } from "../db.js";
+import { db, getNextSequence } from "../db.js";
 
 const router = Router();
 
 router.get("/", async (req, res) => {
   const { user_id } = req.session.user;
-  const [rows] = await pool.query(`
-  SELECT p.property_id, p.name, p.location, p.price_per_night, p.bedrooms, p.bathrooms, p.amenities, p.description,
-  (
-    SELECT i.url
-    FROM property_images i
-    WHERE i.property_id = p.property_id
-    ORDER BY i.image_id ASC
-    LIMIT 1
-  ) AS first_image_url
-  FROM favorites f
-  LEFT JOIN properties p ON p.property_id = f.property_id
-  WHERE f.traveler_id = ?
-  ORDER BY f.created_at DESC; 
-    `, 
-  [user_id]);
+  const rows = await db.collection("favorites").aggregate([
+    { $match: { traveler_id: user_id } },
+    { $lookup: {
+        from: "properties",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "property"
+      }
+    },
+    { $unwind: "$property" },
+    { $lookup: {
+        from: "property_images",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "images"
+      }
+    },
+    { $addFields: {
+        first_image: { $arrayElemAt: [{ $sortArray: { input: "$images", sortBy: { image_id: 1 } } }, 0] }
+      }
+    },
+    { $addFields: {
+        property_id: "$property.property_id",
+        name: "$property.name",
+        location: "$property.location",
+        price_per_night: "$property.price_per_night",
+        bedrooms: "$property.bedrooms",
+        bathrooms: "$property.bathrooms",
+        amenities: "$property.amenities",
+        description: "$property.description",
+        first_image_url: "$first_image.url"
+      }
+    },
+    { $sort: { created_at: -1 } },
+    { $project: {
+        property_id: 1, name: 1, location: 1, price_per_night: 1, bedrooms: 1,
+        bathrooms: 1, amenities: 1, description: 1, first_image_url: 1
+      }
+    }
+  ]).toArray();
   res.json(rows);
 });
 
@@ -28,25 +53,27 @@ router.post("/", async (req, res) => {
   const pid = req.body.property_id
   if (!uid || !pid) return res.status(400).json({ error: "user_id and property_id are required" });
 
+  const exists = await db.collection("favorites").findOne({
+    traveler_id: uid,
+    property_id: pid
+  });
 
-  const[ exists] = await pool.query(
-    'select favorite_id from favorites where  traveler_id = ? and property_id =?',
-    [uid,pid]
-   )
-
-   if (exists.length >0 ){
-    await pool.query(
-      'delete from favorites where  traveler_id = ? and property_id =?',
-    [uid,pid])
+   if (exists) {
+    await db.collection("favorites").deleteOne({
+      traveler_id: uid,
+      property_id: pid
+    });
     return res.status(201).json({message: "Favorite removed"})
    }
    else
    {
-  await pool.query(
-    `INSERT INTO favorites (traveler_id, property_id) values
-     (?, ?)`,
-    [uid, pid]
-  )
+    const favorite_id = await getNextSequence("favoriteid");
+    await db.collection("favorites").insertOne({
+      favorite_id,
+      traveler_id: uid,
+      property_id: pid,
+      created_at: new Date()
+    });
     return res.status(201).json({message: "Favorite added"})
    }
   
