@@ -20,8 +20,16 @@ export default function OwnerDashboard() {
 
     try {
       const d = await api.getbookingStatus();
-      console.log(" history:", d);
-      pending = Array.isArray(d?.pendingRequests) ? d.pendingRequests : [];
+      // Filter pending requests to only show today onwards (double check on frontend)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const allPending = Array.isArray(d?.pendingRequests) ? d.pendingRequests : [];
+      pending = allPending.filter(b => {
+        if (!b.start_date) return false;
+        const startDate = new Date(b.start_date);
+        startDate.setHours(0, 0, 0, 0);
+        return startDate >= today;
+      });
       accepted = Array.isArray(d?.acceptedRequests) ? d.acceptedRequests : [];
       canceled = Array.isArray(d?.canceledRequests) ? d.canceledRequests : [];
     } catch (e) {
@@ -94,14 +102,11 @@ export default function OwnerDashboard() {
               <div className="h6 fw-bold mb-3">Past trips</div>
               <div className="row g-1">
                 {bookHistory.length === 0 && <div className="text-secondary small">No history.</div>}
-                {bookHistory.map(b => {
-                  console.log("hist request:", b.property_name);
-                  return (
-                    <div className="col-12 col-md-6" key={b.booking_id}>
-                      <HistoryCard b={b} />
-                    </div>
-                  );
-                })}
+                {bookHistory.map(b => (
+                  <div className="col-12 col-md-6" key={b.booking_id}>
+                    <HistoryCard b={b} />
+                  </div>
+                ))}
               </div>
             </div>
           </div>
