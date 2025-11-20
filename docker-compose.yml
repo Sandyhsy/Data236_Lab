@@ -60,6 +60,7 @@ services:
       # Use service name 'mongo' for Docker internal networking
       MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017}
       MONGO_DB: ${MONGO_DB:-lab2}
+      KAFKA_BROKERS: redpanda:9092 
     ports:
       - "4000:4000"
     depends_on:
