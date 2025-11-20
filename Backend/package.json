@@ -11,17 +11,23 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-s3": "^3.911.0",
-    "@aws-sdk/s3-request-presigner": "^3.911.0",
+    "@aws-sdk/credential-provider-node": "^3.936.0",
+    "@aws-sdk/protocol-http": "^3.370.0",
+    "@aws-sdk/s3-request-presigner": "^3.936.0",
+    "@aws-sdk/util-format-url": "^3.936.0",
+    "@smithy/protocol-http": "^5.3.5",
     "bcrypt": "^6.0.0",
+    "connect-mongo": "^5.1.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-session": "^1.18.2",
     "kafkajs": "^2.2.4",
-    "mysql2": "^3.15.2",
-    "connect-mongo": "^5.1.0",
     "mongodb": "^6.3.0",
+    "multer": "^2.0.2",
+    "mysql2": "^3.15.2",
     "uuid": "^13.0.0"
   }
 }
