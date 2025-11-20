@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { pool } from "../db.js";
+import { db } from "../db.js";
 
 const router = Router();
 
@@ -9,28 +9,40 @@ router.post("/properties", async (req, res) => {
   const loc = location ? location.trim() : '';
   const s = start === '' ? null : start;
   const e = end === '' ? null : end;
+  const matchConditions = {};
+  if (loc !== '') {
+    matchConditions.location = { $regex: loc, $options: 'i' };
+  }
+  if (s !== null) {
+    matchConditions.availability_start = { $lte: new Date(s) };
+  }
+  if (e !== null) {
+    matchConditions.availability_end = { $gte: new Date(e) };
+  }
+  if (guests !== null && guests !== undefined) {
+    matchConditions.bedrooms = { $gte: guests };
+  }
 
-  const sql = `
-    SELECT
-      p.*,
-      (
-        SELECT i.url
-        FROM property_images i
-        WHERE i.property_id = p.property_id
-        ORDER BY i.image_id ASC
-        LIMIT 1
-      ) AS first_image_url
-    FROM properties p
-    WHERE
-      (? = '' OR LOWER(p.location) LIKE LOWER(?))
-      AND (? IS NULL OR p.availability_start <= ?)
-      AND (? IS NULL OR p.availability_end >= ?)
-      AND (? IS NULL OR p.bedrooms >= ?)
-    ORDER BY p.created_at DESC
-  `;
-
-  const params = [loc, `%${loc}%`, s, s, e, e, guests, guests];
-  const [rows] = await pool.query(sql, params);
+  const rows = await db.collection("properties").aggregate([
+    { $match: matchConditions },
+    { $lookup: {
+        from: "property_images",
+        localField: "property_id",
+        foreignField: "property_id",
+        as: "images"
+      }
+    },
+    { $addFields: {
+        first_image: { $arrayElemAt: [{ $sortArray: { input: "$images", sortBy: { image_id: 1 } } }, 0] }
+      }
+    },
+    { $addFields: {
+        first_image_url: "$first_image.url"
+      }
+    },
+    { $sort: { created_at: -1 } },
+    { $project: { images: 0 } }
+  ]).toArray();
   res.json(rows);
 });
 
@@ -39,28 +51,30 @@ router.post("/properties", async (req, res) => {
 // GET /api/properties - public list for search (includes first image only)
 router.get("/", async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      `
-      SELECT
-        p.*,
-        (
-          SELECT i.url
-          FROM property_images i
-          WHERE i.property_id = p.property_id
-          ORDER BY i.image_id ASC
-          LIMIT 1
-        ) AS first_image_url
-      FROM properties p
-      ORDER BY p.created_at DESC
-      `
-    );
+    const rows = await db.collection("properties").aggregate([
+      { $lookup: {
+          from: "property_images",
+          localField: "property_id",
+          foreignField: "property_id",
+          as: "images"
+        }
+      },
+      { $addFields: {
+          first_image: { $arrayElemAt: [{ $sortArray: { input: "$images", sortBy: { image_id: 1 } } }, 0] }
+        }
+      },
+      { $addFields: {
+          first_image_url: "$first_image.url"
+        }
+      },
+      { $sort: { created_at: -1 } },
+      { $project: { images: 0 } }
+    ]).toArray();
     res.json(rows);
   } catch (err) {
     console.error("[GET /api/properties] error:", err);
     res.status(500).json({ error: "Failed to load properties" });
   }
 });
-
-
 
 export default router;
