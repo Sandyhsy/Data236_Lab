@@ -2,37 +2,51 @@ import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 
-// Minimal initial form state
-const empty = {
-  name: "", type: "", description: "", location: "", amenities: "",
-  price_per_night: "", bedrooms: "", bathrooms: "",
-  availability_start: "", availability_end: ""
-};
+const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const MAX_SIZE = 25 * 1024 * 1024; // 25MB to match backend proxy
+const PUT_TIMEOUT_MS = 120000;     // 120s guard
 
 export default function PropertyForm({ edit }) {
   const { state } = useLocation();
   const nav = useNavigate();
   const { id } = useParams();
 
-  const [form, setForm] = useState(empty);
-  const [imageText, setImageText] = useState(""); // persisted URLs, one per line
+  const [form, setForm] = useState({
+    name: "",
+    type: "",
+    description: "",
+    location: "",
+    amenities: "",
+    price_per_night: "",
+    bedrooms: "",
+    bathrooms: "",
+    availability_start: "",
+    availability_end: "",
+  });
+
+  const [imageText, setImageText] = useState("");
   const [msg, setMsg] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState("");
-  const fileRef = useRef(null);
-  const [stagedUrls, setStagedUrls] = useState([]); // create-mode temporary URLs
-
-  // New: simple error state for date validation
   const [errors, setErrors] = useState({});
+  const fileRef = useRef(null);
+  const [stagedUrls, setStagedUrls] = useState([]);
 
-  // Parse persisted URLs
   const urls = useMemo(
-    () => imageText.split("\n").map(s => s.trim()).filter(Boolean),
+    () => imageText.split("\n").map((s) => s.trim()).filter(Boolean),
     [imageText]
   );
-
-  // Preview = staged (create mode) + persisted
   const preview = useMemo(() => [...stagedUrls, ...urls], [stagedUrls, urls]);
+
+  function formatDateForInput(v) {
+    if (!v) return "";
+    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return "";
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate()
+    ).padStart(2, "0")}`;
+  }
 
   useEffect(() => {
     async function init() {
@@ -47,90 +61,115 @@ export default function PropertyForm({ edit }) {
           price_per_night: p.price_per_night || "",
           bedrooms: p.bedrooms ?? "",
           bathrooms: p.bathrooms ?? "",
-          availability_start: p.availability_start || "",
-          availability_end: p.availability_end || ""
+          availability_start: formatDateForInput(p.availability_start),
+          availability_end: formatDateForInput(p.availability_end),
         });
         const imgs = await api.getPropertyImages(p.property_id).catch(() => []);
-        setImageText(imgs.map(i => i.url).join("\n"));
+        setImageText(imgs.map((i) => i.url).join("\n"));
       }
     }
     init();
   }, [edit, state]);
 
-  // Persist image URLs to MySQL property_images
   async function syncUrlsToServer(propertyId, list) {
     await api.setPropertyImages(propertyId, list);
   }
 
-  // Handle S3 upload (edit: properties/{id}/; create: staging/)
-  async function handleUploadFiles(fileList) {
+  function validateFiles(fileList) {
+    for (const f of Array.from(fileList)) {
+      if (f.size > MAX_SIZE) {
+        setUploadErr(`File ${f.name} is too large.`);
+        return false;
+      }
+      if (!ALLOWED_MIME.includes(f.type)) {
+        setUploadErr(`Unsupported format: ${f.name}`);
+        return false;
+      }
+    }
     setUploadErr("");
+    return true;
+  }
+
+  async function putWithTimeout(url, file, contentType) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort("timeout"), PUT_TIMEOUT_MS);
+    try {
+      return await fetch(url, {
+        method: "PUT",
+        headers: { "Content-Type": contentType },
+        body: file,
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  async function handleUploadFiles(fileList) {
+    if (!fileList?.length) return;
+    if (!validateFiles(fileList)) return;
+
     setUploading(true);
     try {
       if (edit && id) {
-        // Edit mode: upload and persist immediately
         let working = [...urls];
         for (const file of Array.from(fileList)) {
-          const presign = await api.presignUpload({
-            property_id: Number(id),
-            filename: file.name,
-            contentType: file.type || "application/octet-stream"
-          });
-          const putRes = await fetch(presign.uploadUrl, {
-            method: "PUT",
-            headers: { "Content-Type": file.type || "application/octet-stream" },
-            body: file
-          });
-          if (!putRes.ok) throw new Error(`Upload failed: ${file.name}`);
-          working.push(presign.publicUrl);
-          await syncUrlsToServer(Number(id), working);
-          setImageText(working.join("\n"));
+          try {
+            const presign = await api.presignUpload({
+              property_id: Number(id),
+              filename: file.name,
+              contentType: file.type || "image/jpeg",
+            });
+            const contentTypeToUse = presign.contentType || file.type || "image/jpeg";
+            const putRes = await putWithTimeout(presign.uploadUrl, file, contentTypeToUse);
+            if (!putRes.ok) throw new Error(await putRes.text().catch(() => putRes.statusText));
+            working.push(presign.publicUrl);
+            setImageText(working.join("\n"));
+          } catch {
+            const prox = await api.proxyPropertyUpload(Number(id), file);
+            working.push(prox.publicUrl);
+            setImageText(working.join("\n"));
+          }
         }
         return;
       }
 
-      // Create mode: upload to staging, show immediately
       const added = [];
       for (const file of Array.from(fileList)) {
-        const presign = await api.presignUploadTemp({
-          filename: file.name,
-          contentType: file.type || "application/octet-stream"
-        });
-        const putRes = await fetch(presign.uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": file.type || "application/octet-stream" },
-          body: file
-        });
-        if (!putRes.ok) throw new Error(`Upload failed: ${file.name}`);
-        added.push(presign.publicUrl);
+        try {
+          const presign = await api.presignUploadTemp({
+            filename: file.name,
+            contentType: file.type || "image/jpeg",
+          });
+          const contentTypeToUse = presign.contentType || file.type || "image/jpeg";
+          const putRes = await putWithTimeout(presign.uploadUrl, file, contentTypeToUse);
+          if (!putRes.ok) throw new Error(await putRes.text().catch(() => putRes.statusText));
+          added.push(presign.publicUrl);
+        } catch {
+          const prox = await api.proxyStagingUpload(file);
+          added.push(prox.publicUrl);
+        }
       }
-      setStagedUrls(prev => [...prev, ...added]);
+      setStagedUrls((prev) => [...prev, ...added]);
     } catch (e) {
-      console.error(e);
-      setUploadErr(e.message || "Upload failed");
+      setUploadErr(e?.message || "Upload failed.");
     } finally {
       setUploading(false);
     }
   }
 
-  // Remove an image URL (handles staged or persisted)
   async function removeUrl(u) {
-    // Best-effort delete from S3
-    try { await api.deleteS3Object(u); } catch (_) {}
-    // If staged (create mode), remove locally
+    try {
+      await api.deleteS3Object(u);
+    } catch {}
     if (stagedUrls.includes(u)) {
-      setStagedUrls(stagedUrls.filter(x => x !== u));
+      setStagedUrls(stagedUrls.filter((x) => x !== u));
       return;
     }
-    // Otherwise update persisted list and sync
-    const next = urls.filter(x => x !== u);
+    const next = urls.filter((x) => x !== u);
     setImageText(next.join("\n"));
-    if (edit && id) {
-      await api.setPropertyImages(Number(id), next);
-    }
   }
 
-  // New: validate required dates and ordering
   function validate() {
     const errs = {};
     if (!form.availability_start) errs.availability_start = "Availability start is required.";
@@ -141,26 +180,23 @@ export default function PropertyForm({ edit }) {
       if (s > e) errs.dateRange = "End date must be on or after start date.";
     }
     setErrors(errs);
-    if (Object.keys(errs).length > 0) {
-      window.alert(Object.values(errs).join("\n")); // simple blocking alert
+    if (Object.keys(errs).length) {
+      alert(Object.values(errs).join("\n"));
       return false;
     }
     return true;
   }
 
-  // Create or update property
   const save = async (e) => {
     e.preventDefault();
     setMsg("");
-
-    // Block submit if dates invalid/missing
     if (!validate()) return;
 
     const payload = {
       ...form,
       price_per_night: form.price_per_night ? Number(form.price_per_night) : null,
       bedrooms: form.bedrooms ? Number(form.bedrooms) : null,
-      bathrooms: form.bathrooms ? Number(form.bathrooms) : null
+      bathrooms: form.bathrooms ? Number(form.bathrooms) : null,
     };
 
     if (edit) {
@@ -173,7 +209,7 @@ export default function PropertyForm({ edit }) {
       if (stagedUrls.length > 0) {
         const out = await api.finalizeTempUploads({
           property_id: created.property_id,
-          tempUrls: stagedUrls
+          tempUrls: stagedUrls,
         });
         finalUploads = Array.isArray(out?.finalUrls) ? out.finalUrls : [];
       }
@@ -195,32 +231,32 @@ export default function PropertyForm({ edit }) {
             <div className="row g-3">
               <div className="col-md-6">
                 <label className="form-label">Name</label>
-                <input className="form-control" value={form.name} onChange={e=>setForm({...form, name:e.target.value})} />
+                <input className="form-control" value={form.name} onChange={(e)=>setForm({...form, name:e.target.value})} />
               </div>
 
               <div className="col-md-6">
                 <label className="form-label">Type</label>
-                <input className="form-control" value={form.type} onChange={e=>setForm({...form, type:e.target.value})} placeholder="Apartment, House, Studio" />
+                <input className="form-control" value={form.type} onChange={(e)=>setForm({...form, type:e.target.value})} placeholder="Apartment, House, Studio" />
               </div>
 
               <div className="col-md-6">
                 <label className="form-label">Location</label>
-                <input className="form-control" value={form.location} onChange={e=>setForm({...form, location:e.target.value})} placeholder="City, Country" />
+                <input className="form-control" value={form.location} onChange={(e)=>setForm({...form, location:e.target.value})} placeholder="City, Country" />
               </div>
 
               <div className="col-md-6">
                 <label className="form-label">Price per night (USD)</label>
-                <input className="form-control" type="number" step="0.01" value={form.price_per_night} onChange={e=>setForm({...form, price_per_night:e.target.value})} />
+                <input className="form-control" type="number" step="0.01" value={form.price_per_night} onChange={(e)=>setForm({...form, price_per_night:e.target.value})} />
               </div>
 
               <div className="col-md-6">
                 <label className="form-label">Bedrooms</label>
-                <input className="form-control" type="number" value={form.bedrooms} onChange={e=>setForm({...form, bedrooms:e.target.value})} />
+                <input className="form-control" type="number" value={form.bedrooms} onChange={(e)=>setForm({...form, bedrooms:e.target.value})} />
               </div>
 
               <div className="col-md-6">
                 <label className="form-label">Bathrooms</label>
-                <input className="form-control" type="number" value={form.bathrooms} onChange={e=>setForm({...form, bathrooms:e.target.value})} />
+                <input className="form-control" type="number" value={form.bathrooms} onChange={(e)=>setForm({...form, bathrooms:e.target.value})} />
               </div>
 
               <div className="col-md-6">
@@ -229,7 +265,7 @@ export default function PropertyForm({ edit }) {
                   className={`form-control ${errors.availability_start ? "is-invalid" : ""}`}
                   type="date"
                   value={form.availability_start}
-                  onChange={e=>setForm({...form, availability_start:e.target.value})}
+                  onChange={(e)=>setForm({...form, availability_start:e.target.value})}
                   required
                 />
                 {errors.availability_start && <div className="invalid-feedback">{errors.availability_start}</div>}
@@ -242,7 +278,7 @@ export default function PropertyForm({ edit }) {
                   type="date"
                   min={form.availability_start || undefined}
                   value={form.availability_end}
-                  onChange={e=>setForm({...form, availability_end:e.target.value})}
+                  onChange={(e)=>setForm({...form, availability_end:e.target.value})}
                   required
                 />
                 {(errors.availability_end || errors.dateRange) && (
@@ -254,12 +290,12 @@ export default function PropertyForm({ edit }) {
 
               <div className="col-md-6">
                 <label className="form-label">Amenities (comma separated)</label>
-                <input className="form-control" value={form.amenities} onChange={e=>setForm({...form, amenities:e.target.value})} placeholder="WiFi, Kitchen, Heating" />
+                <input className="form-control" value={form.amenities} onChange={(e)=>setForm({...form, amenities:e.target.value})} placeholder="WiFi, Kitchen, Heating" />
               </div>
 
               <div className="col-md-6">
                 <label className="form-label">Description</label>
-                <textarea className="form-control" rows={3} value={form.description} onChange={e=>setForm({...form, description:e.target.value})} />
+                <textarea className="form-control" rows={3} value={form.description} onChange={(e)=>setForm({...form, description:e.target.value})} />
               </div>
 
               {/* Upload images */}
@@ -272,7 +308,7 @@ export default function PropertyForm({ edit }) {
                     className="d-none"
                     type="file"
                     multiple
-                    accept="image/*"
+                    accept={ALLOWED_MIME.join(",")}
                     onChange={(e) => {
                       const files = e.target.files;
                       if (files && files.length > 0) {
@@ -289,15 +325,15 @@ export default function PropertyForm({ edit }) {
                   >
                     {uploading ? "Uploading..." : "Choose files"}
                   </button>
-                  <span className="text-secondary small">JPG, PNG, WEBP supported.</span>
+                  <span className="text-secondary small">JPG, PNG, WEBP, GIF up to 25MB.</span>
                 </div>
                 {uploadErr && <div className="text-danger small mt-2">{uploadErr}</div>}
               </div>
 
-              {/* Preview grid (no filenames, only Remove button) */}
+              {/* Preview grid */}
               <div className="col-12">
                 <div className="row g-2">
-                  {preview.map(u => (
+                  {preview.map((u) => (
                     <div className="col-6 col-md-3" key={u}>
                       <div className="card position-relative">
                         <img src={u} alt="preview" className="img-cover" />
