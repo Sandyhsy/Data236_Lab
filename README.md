@@ -1,16 +1,10 @@
 # Data236_Lab
 
-First, you have to input the dataset into MongoDB:
-1. Connect to MongoDB: docker run -d -p 27017:27017 --name airbnb_db mongo:latest
-2. Import data into MongoDB: mongosh "mongodb://localhost:27017" seed_airbnb.js
-
 To run the project, follow the steps:
-1. Download our SQL file and insert into your own MySQL instance.
-2. Update “Backend/.env” with your own environment setting and keys.
-3. Open two separate terminal and enter “cd Frontend” and “cd Backend”.
-4. Run “npm install” in both terminal to install all the needed packages.
-5. Run “npm start” in both terminal to launch the project.
-6. Example owner and traveler log in email and password:
+1. Go to Terminal
+2. Move to the file direction `cd Data236_Lab-main`
+3. Then set up the environment `docker compose up -d`
+4. Example owner and traveler login email and password:
 <table>
   <tr>
     <th>Role</th>
