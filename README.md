@@ -23,4 +23,5 @@ A full-stack Airbnb-style rental platform built with **React**, **FastAPI**, **M
     <td>demo1234</td>
   </tr>
 </table>
-5. Stopping the Containers `docker compose down`
+
+6. Stopping the Containers `docker compose down`
