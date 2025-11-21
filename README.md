@@ -1,11 +1,12 @@
 # Data236_Lab
+A full-stack Airbnb-style rental platform built with **React**, **FastAPI**, **MySQL**, **MongoDB**, and **Redpanda**, containerized using **Docker Compose**.
 
-To run the project, follow the steps:
-1. Go to Terminal
-2. Move to the file direction `cd Data236_Lab-main`
-3. Then set up the environment `docker compose up -d`
-4. Example owner and traveler login email and password:
-<table>
+## Run the Project
+1. Open terminal and move to the file directory `cd Data236_Lab-main`
+3. Start the environment `docker compose up -d`
+4. Visit http://localhost:3000
+5. Example owner and traveler login email and password:
+   <table>
   <tr>
     <th>Role</th>
     <th>Email</th>
@@ -22,11 +23,4 @@ To run the project, follow the steps:
     <td>demo1234</td>
   </tr>
 </table>
-
-# Agent Setup
-
-1. Create a virtual environment and activate it.
-2. Install dependencies with `pip install -r requirements.txt`.
-3. Copy `.env.example` to `.env` and fill in required keys.
-4. Start the agent with `uvicorn agent.main:app --reload`.
-
+5. Stopping the Containers `docker compose down`
