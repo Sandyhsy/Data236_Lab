@@ -2,8 +2,8 @@
 A full-stack Airbnb-style rental platform built with **React**, **FastAPI**, **MySQL**, **MongoDB**, and **Redpanda**, containerized using **Docker Compose**.
 
 ## Run the Project
-1. Open terminal and move to the file directory `cd Data236_Lab-main`
-3. Start the environment `docker compose up -d`
+1. Open terminal and move to the file directory ```powershell cd Data236_Lab-main```
+3. Start the environment ```powershell docker compose up -d```
 4. Visit http://localhost:3000
 5. Example owner and traveler login email and password:
    <table>
@@ -23,4 +23,4 @@ A full-stack Airbnb-style rental platform built with **React**, **FastAPI**, **M
        <td>demo1234</td>
      </tr>
    </table>
-7. Stopping the Containers `docker compose down`
+7. Stopping the Containers ```powershell docker compose down```
