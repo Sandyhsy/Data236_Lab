@@ -3,8 +3,8 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 
 const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp", "image/gif"];
-const MAX_SIZE = 25 * 1024 * 1024; // 25MB to match backend proxy
-const PUT_TIMEOUT_MS = 120000;     // 120s guard
+const MAX_SIZE = 25 * 1024 * 1024; 
+const PUT_TIMEOUT_MS = 120000;     
 
 export default function PropertyForm({ edit }) {
   const { state } = useLocation();
@@ -92,71 +92,95 @@ export default function PropertyForm({ edit }) {
 
   async function putWithTimeout(url, file, contentType) {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort("timeout"), PUT_TIMEOUT_MS);
+    let timeoutId = null;
     try {
-      return await fetch(url, {
+      timeoutId = setTimeout(() => {
+        if (!ctrl.signal.aborted) {
+          ctrl.abort();
+        }
+      }, PUT_TIMEOUT_MS);
+      
+      const response = await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": contentType },
         body: file,
         signal: ctrl.signal,
       });
-    } finally {
-      clearTimeout(t);
+      
+      if (timeoutId) clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error(`Upload timeout after ${PUT_TIMEOUT_MS}ms`);
+      }
+      throw error;
     }
   }
-
+  
   async function handleUploadFiles(fileList) {
     if (!fileList?.length) return;
     if (!validateFiles(fileList)) return;
 
+    setUploadErr("");
     setUploading(true);
     try {
       if (edit && id) {
+        // Edit mode: upload and persist immediately
         let working = [...urls];
         for (const file of Array.from(fileList)) {
-          try {
-            const presign = await api.presignUpload({
-              property_id: Number(id),
-              filename: file.name,
-              contentType: file.type || "image/jpeg",
-            });
-            const contentTypeToUse = presign.contentType || file.type || "image/jpeg";
-            const putRes = await putWithTimeout(presign.uploadUrl, file, contentTypeToUse);
-            if (!putRes.ok) throw new Error(await putRes.text().catch(() => putRes.statusText));
-            working.push(presign.publicUrl);
-            setImageText(working.join("\n"));
-          } catch {
-            const prox = await api.proxyPropertyUpload(Number(id), file);
-            working.push(prox.publicUrl);
-            setImageText(working.join("\n"));
+          const presign = await api.presignUpload({
+            property_id: Number(id),
+            filename: file.name,
+            contentType: file.type || "application/octet-stream"
+          });
+          
+          // 一定要用後端回傳的 contentType（和簽名一致）
+          const ct = presign.contentType || "image/jpeg";
+          
+          // 使用 putWithTimeout 確保不會卡太久
+          const putRes = await putWithTimeout(presign.uploadUrl, file, ct);
+          if (!putRes.ok) {
+            const txt = await putRes.text().catch(() => "");
+            throw new Error(`Upload failed for ${file.name}: ${putRes.status}${txt ? ` - ${txt}` : ""}`);
           }
+          
+          working.push(presign.publicUrl);
+          await syncUrlsToServer(Number(id), working);
+          setImageText(working.join("\n"));
         }
         return;
       }
 
+      // Create mode: upload to staging, show immediately
       const added = [];
       for (const file of Array.from(fileList)) {
-        try {
-          const presign = await api.presignUploadTemp({
-            filename: file.name,
-            contentType: file.type || "image/jpeg",
-          });
-          const contentTypeToUse = presign.contentType || file.type || "image/jpeg";
-          const putRes = await putWithTimeout(presign.uploadUrl, file, contentTypeToUse);
-          if (!putRes.ok) throw new Error(await putRes.text().catch(() => putRes.statusText));
-          added.push(presign.publicUrl);
-        } catch {
-          const prox = await api.proxyStagingUpload(file);
-          added.push(prox.publicUrl);
+        const presign = await api.presignUploadTemp({
+          filename: file.name,
+          contentType: file.type || "application/octet-stream"
+        });
+        
+        // 一定要用後端回傳的 contentType（和簽名一致）
+        const ct = presign.contentType || "image/jpeg";
+        
+        // 使用 putWithTimeout 確保不會卡太久
+        const putRes = await putWithTimeout(presign.uploadUrl, file, ct);
+        if (!putRes.ok) {
+          const txt = await putRes.text().catch(() => "");
+          throw new Error(`Upload failed for ${file.name}: ${putRes.status}${txt ? ` - ${txt}` : ""}`);
         }
+        
+        added.push(presign.publicUrl);
       }
-      setStagedUrls((prev) => [...prev, ...added]);
+      setStagedUrls(prev => [...prev, ...added]);
     } catch (e) {
-      setUploadErr(e?.message || "Upload failed.");
+      console.error("[PropertyForm] Upload error:", e);
+      setUploadErr(e.message || "Upload failed");
     } finally {
       setUploading(false);
     }
   }
+
 
   async function removeUrl(u) {
     try {
@@ -353,9 +377,9 @@ export default function PropertyForm({ edit }) {
                 </div>
               </div>
 
-              <div className="col-12 d-flex justify-content-end gap-2">
+              <div className="col-12 text-center mt-4">
                 <button className="btn btn-danger" type="submit">{edit ? "Save" : "Create"}</button>
-                {msg && <span className="text-success align-self-center">{msg}</span>}
+                {msg && <span className="text-success ms-2">{msg}</span>}
               </div>
             </div>
           </form>
