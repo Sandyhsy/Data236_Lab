@@ -10,7 +10,7 @@ import { v4 as uuid } from "uuid";
 import { requireOwner } from "../middleware/requireOwner.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 
-// Low-level presigner (prevents checksum params in URL)
+// Low-level presigner
 import { S3RequestPresigner } from "@aws-sdk/s3-request-presigner";
 import { Sha256 } from "@aws-crypto/sha256-js";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
@@ -24,7 +24,7 @@ dotenv.config();
 
 const router = Router();
 
-// S3 client for server-side copy/delete/put
+// S3 client
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
   maxAttempts: 3,
@@ -32,14 +32,13 @@ const s3 = new S3Client({
   forcePathStyle: false,
 });
 
-// Presigner without flexible-checksum middleware
+// Presigner
 const presigner = new S3RequestPresigner({
   region: process.env.AWS_REGION,
   credentials: defaultProvider(),
   sha256: Sha256,
 });
 
-// Acceptable preview extensions
 const PREVIEW_EXTS = ["jpg", "jpeg", "png", "webp", "gif"];
 
 function extOf(nameOrKey) {
@@ -47,16 +46,18 @@ function extOf(nameOrKey) {
   if (!n.includes(".")) return "";
   return n.split(".").pop();
 }
+
 function pickWebPreviewExt(nameOrKey) {
   const ext = extOf(nameOrKey);
   return PREVIEW_EXTS.includes(ext) ? ext : "jpg";
 }
+
 function normalizeContentType(ct) {
   const t = String(ct || "").toLowerCase();
   return t.startsWith("image/") ? t : "image/jpeg";
 }
 
-// Build a presigned PUT URL without checksum params
+// Build presigned PUT URL
 async function presignPut({ bucket, region, key, contentType, expiresIn = 300 }) {
   const host = `${bucket}.s3.${region}.amazonaws.com`;
   const req = new HttpRequest({
@@ -66,7 +67,6 @@ async function presignPut({ bucket, region, key, contentType, expiresIn = 300 })
     path: `/${encodeURIComponent(key).replace(/%2F/g, "/")}`,
     headers: {
       host,
-      // Content-Type must be part of the signature and also sent by the browser
       "content-type": contentType,
     },
   });
@@ -74,7 +74,7 @@ async function presignPut({ bucket, region, key, contentType, expiresIn = 300 })
   return formatUrl(signed);
 }
 
-// ---------- DIRECT PRESIGN: EDIT (properties/<id>/...) ----------
+// Direct presign routes
 router.post("/s3-presign", requireOwner, async (req, res) => {
   try {
     const { property_id, filename, contentType } = req.body;
@@ -99,7 +99,6 @@ router.post("/s3-presign", requireOwner, async (req, res) => {
   }
 });
 
-// ---------- DIRECT PRESIGN: CREATE (staging/<user_id>/...) ----------
 router.post("/s3-presign-temp", requireOwner, async (req, res) => {
   try {
     const { filename, contentType } = req.body;
@@ -125,7 +124,34 @@ router.post("/s3-presign-temp", requireOwner, async (req, res) => {
   }
 });
 
-// ---------- FINALIZE: move staging → properties ----------
+router.post("/s3-presign-profile", requireAuth, async (req, res) => {
+  try {
+    const { filename, contentType } = req.body;
+    if (!filename || !contentType) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+    if (!req.session?.user?.user_id) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    const userId = req.session.user.user_id;
+    const key = `profiles/${Number(userId)}/${uuid()}.${pickWebPreviewExt(filename)}`;
+    const ct = normalizeContentType(contentType);
+
+    const uploadUrl = await presignPut({
+      bucket: process.env.S3_BUCKET,
+      region: process.env.AWS_REGION,
+      key,
+      contentType: ct,
+      expiresIn: 300,
+    });
+    const publicUrl = `${process.env.S3_PUBLIC_BASE}/${encodeURIComponent(key)}`;
+    res.json({ uploadUrl, key, publicUrl, contentType: ct });
+  } catch (err) {
+    console.error("[S3 presign profile error]:", err);
+    res.status(500).json({ error: "Failed to generate upload URL: " + (err.message || "Unknown error") });
+  }
+});
+
 router.post("/finalize", requireOwner, async (req, res) => {
   try {
     const { property_id, tempUrls } = req.body;
@@ -161,7 +187,6 @@ router.post("/finalize", requireOwner, async (req, res) => {
   }
 });
 
-// ---------- BEST-EFFORT DELETE (by public URL) ----------
 router.post("/s3-delete", requireOwner, async (req, res) => {
   try {
     const { url } = req.body;
@@ -176,42 +201,12 @@ router.post("/s3-delete", requireOwner, async (req, res) => {
   }
 });
 
-// ---------- DIRECT PRESIGN: PROFILE PICTURE (profiles/<user_id>/...) ----------
-router.post("/s3-presign-profile", requireAuth, async (req, res) => {
-  try {
-    const { filename, contentType } = req.body;
-    if (!filename || !contentType) {
-      return res.status(400).json({ error: "Missing fields" });
-    }
-    if (!req.session?.user?.user_id) {
-      return res.status(401).json({ error: "Not authenticated" });
-    }
-    const userId = req.session.user.user_id;
-    const key = `profiles/${Number(userId)}/${uuid()}.${pickWebPreviewExt(filename)}`;
-    const ct = normalizeContentType(contentType);
-
-    const uploadUrl = await presignPut({
-      bucket: process.env.S3_BUCKET,
-      region: process.env.AWS_REGION,
-      key,
-      contentType: ct,
-      expiresIn: 300,
-    });
-    const publicUrl = `${process.env.S3_PUBLIC_BASE}/${encodeURIComponent(key)}`;
-    res.json({ uploadUrl, key, publicUrl, contentType: ct });
-  } catch (err) {
-    console.error("[S3 presign profile error]:", err);
-    res.status(500).json({ error: "Failed to generate upload URL: " + (err.message || "Unknown error") });
-  }
-});
-
-// ---------- PROXY UPLOAD FALLBACK (multipart) ----------
+// Proxy upload fallback
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB cap
+  limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-// POST /api/uploads/proxy-property  -> final properties/<id>/...
 router.post("/proxy-property", requireOwner, upload.single("file"), async (req, res) => {
   try {
     const { property_id, filename } = req.body;
@@ -237,7 +232,6 @@ router.post("/proxy-property", requireOwner, upload.single("file"), async (req, 
   }
 });
 
-// POST /api/uploads/proxy-staging -> staging/<user_id>/...
 router.post("/proxy-staging", requireOwner, upload.single("file"), async (req, res) => {
   try {
     const userId = req.session.user.user_id;
@@ -263,7 +257,6 @@ router.post("/proxy-staging", requireOwner, upload.single("file"), async (req, r
   }
 });
 
-// POST /api/uploads/proxy-profile -> profiles/<user_id>/...
 router.post("/proxy-profile", requireAuth, upload.single("file"), async (req, res) => {
   try {
     if (!req.session?.user?.user_id || !req.file) {
