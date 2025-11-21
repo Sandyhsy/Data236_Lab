@@ -52,63 +52,74 @@ export default function Profile() {
     setUploadErr("");
     return true;
   }
-  const PUT_TIMEOUT_MS = 45000; // 45s; adjust if needed
+
+  const PUT_TIMEOUT_MS = 45000; // 45s
   async function putWithTimeout(url, file, contentType) {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort("timeout"), PUT_TIMEOUT_MS);
+    let timeoutId = null;
     try {
-      return await fetch(url, {
+      timeoutId = setTimeout(() => {
+        if (!ctrl.signal.aborted) {
+          ctrl.abort();
+        }
+      }, PUT_TIMEOUT_MS);
+      
+      const response = await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": contentType },
         body: file,
         signal: ctrl.signal,
       });
-    } finally {
-      clearTimeout(t);
+      
+      if (timeoutId) clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error(`Upload timeout after ${PUT_TIMEOUT_MS}ms`);
+      }
+      throw error;
     }
   }
 
   async function handleUploadProfile(fileList) {
-    if (!fileList || !fileList.length) return;
+    if (!fileList || fileList.length === 0) return;
     const file = fileList[0];
+    
+    // 可選：順便做檔案檢查
     if (!validateFile(file)) return;
-  
+
     setUploading(true);
     setUploadErr("");
     try {
+      // 先跟後端拿 presigned URL
       const presign = await api.presignProfileUpload({
         filename: file.name,
-        contentType: file.type || "image/jpeg",
+        contentType: file.type || "application/octet-stream",
       });
-      if (!presign?.uploadUrl) throw new Error("Failed to get upload URL");
-  
-      const contentTypeToUse = presign.contentType || file.type || "image/jpeg";
-  
-      // Try direct PUT with timeout
-      const putRes = await putWithTimeout(presign.uploadUrl, file, contentTypeToUse);
+
+      // 一定要用後端回傳的 contentType（和簽名一致）
+      const ct = presign.contentType || "image/jpeg";
+
+      // 用你上面寫好的 putWithTimeout
+      const putRes = await putWithTimeout(presign.uploadUrl, file, ct);
       if (!putRes.ok) {
-        const body = await putRes.text().catch(() => "");
-        throw new Error(`S3 upload failed: ${putRes.status} ${putRes.statusText}${body ? ` - ${body}` : ""}`);
+        const txt = await putRes.text().catch(() => "");
+        throw new Error(
+          `S3 PUT failed ${putRes.status}${txt ? ` - ${txt}` : ""}`
+        );
       }
-  
-      // Success: show preview; save to DB later
+
+      // 更新畫面上的頭像
       setForm((prev) => ({ ...prev, profile_picture: presign.publicUrl }));
       setMsg("Profile image uploaded. Remember to Save changes.");
-  
     } catch (e) {
-      // Fallback to proxy to avoid CORS/PUT stalls
-      try {
-        const prox = await api.proxyProfileUpload(file);
-        setForm((prev) => ({ ...prev, profile_picture: prox.publicUrl }));
-        setMsg("Profile image uploaded via proxy. Remember to Save changes.");
-      } catch (e2) {
-        setUploadErr(e?.message || e2?.message || "Upload failed. Please try again.");
-      }
+      console.error("Profile upload failed", e);
+      setUploadErr(e.message || "Upload failed");
     } finally {
       setUploading(false);
     }
   }
-  
 
   async function save(e) {
     e.preventDefault();
