@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: data236
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+    spec:
+      containers:
+        - name: agent
+          image: dohyeong99/lab2-agent:v1    # your actual agent image
+          command: ["uvicorn"]
+          args: ["agent.main:app", "--host", "0.0.0.0", "--port", "8000"]   # ✅ fixed
+          ports:
+            - containerPort: 8000
+          env:
+            - name: BACKEND_URL
+              value: "http://backend:4000"
+            - name: MONGODB_URI
+              value: "mongodb://mongo:27017/airbnb_db"
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: GEMINI_API_KEY
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent
+  namespace: data236
+spec:
+  selector:
+    app: agent
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
