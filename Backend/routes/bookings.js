@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { db, getNextSequence } from "../db.js";
 import { requireOwner } from "../middleware/requireOwner.js";
+import { requireAuth } from "../middleware/requireAuth.js";
 import { producer } from "../server.js";
 
 const router = Router();
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   const { user_id } = req.session.user;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -46,7 +47,7 @@ router.get("/", async (req, res) => {
   res.json(bookings)
 })
 
-router.get("/status", async (req, res) => {
+router.get("/status", requireAuth, async (req, res) => {
   const { user_id } = req.session.user;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -181,18 +182,23 @@ router.get("/status", async (req, res) => {
 
 
 
-router.post("/", async (req, res) => {
+router.post("/", requireAuth, async (req, res) => {
   const { user_id } = req.session.user;
   const { property_id, start_date, end_date, guests } = req.body;
 
   const startDate = new Date(start_date);
   const endDate = new Date(end_date);
+  const propertyId = parseInt(property_id, 10);
+
+  if (Number.isNaN(propertyId)) {
+    return res.status(400).json({ error: "property_id must be a number" });
+  }
 
   const booking_id = await getNextSequence("bookingid");
   await db.collection("bookings").insertOne({
     booking_id,
     traveler_id: user_id,
-    property_id,
+    property_id: propertyId,
     start_date: startDate,
     end_date: endDate,
     guests: guests || null,
@@ -200,14 +206,14 @@ router.post("/", async (req, res) => {
     created_at: new Date()
   });
 
-      const bookingEvent = {
-        booking_id: booking_id,
-        status: "PENDING",
-      };
-        await producer.send({
-        topic: "booking_req",
-        messages: [{ key: String(booking_id), value: JSON.stringify(bookingEvent) }],
-      });
+  const bookingEvent = {
+    booking_id: booking_id,
+    status: "PENDING",
+  };
+  await producer.send({
+    topic: "booking_req",
+    messages: [{ key: String(booking_id), value: JSON.stringify(bookingEvent) }],
+  });
 
   res.json({ insertId: booking_id })
 })

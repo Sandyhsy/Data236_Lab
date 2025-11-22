@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
-// Use direct backend URL since we removed the proxy
+// Use relative URL that goes through nginx proxy to backend
 const rawConcierge = process.env.REACT_APP_CONCIERGE_URL || 
-  (process.env.REACT_APP_API_URL || "http://localhost:4000/api") + "/ai";
-const conciergeBase = rawConcierge.replace(/\/$/, "").endsWith("/ai") 
-  ? rawConcierge.replace(/\/$/, "")
-  : `${rawConcierge.replace(/\/$/, "")}/ai`;
+  (process.env.REACT_APP_API_URL || "/api") + "/ai";
+const conciergeBase = rawConcierge.replace(/\/$/, "");
 
 function toKey(booking) {
   if (!booking) return "";

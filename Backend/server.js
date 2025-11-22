@@ -16,6 +16,7 @@ import profileRoutes from "./routes/profile.js";
 import searchRoutes from "./routes/search.js"
 import favoriteRoutes from "./routes/favorites.js"
 import aiRoutes from "./routes/ai.js";
+import { seedDatabase } from "./seedData.js";
 
 
 
@@ -55,6 +56,13 @@ await consumer.run({
     }
   }
 });
+
+try {
+  await seedDatabase();
+  console.log("Seed data ready");
+} catch (err) {
+  console.error("Failed to seed database:", err);
+}
 
 app.use(cors({
   origin: process.env.CLIENT_ORIGIN || "http://localhost:3000",

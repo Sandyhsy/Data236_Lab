@@ -1,19 +1,30 @@
-import React, { useState } from "react";
-import { api } from "../api";
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { signupUser, clearError } from "../store/authSlice";
 
-export default function SignupTravel({ onSignup }) {
+export default function SignupTravel() {
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+  const { loading, error, isAuthenticated } = useAppSelector((state) => state.auth);
   const [form, setForm] = useState({ name: "", email: "", password: "", city: "", country: "" });
-  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate("/search");
+    }
+  }, [isAuthenticated, navigate]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(clearError());
+    };
+  }, [dispatch]);
 
   const submit = async (e) => {
     e.preventDefault();
-    setErr("");
-    try{
-      const d = await api.signup({...form, role: "traveler"});
-      onSignup(d.user);
-    }catch(e){
-      setErr(e.message);
-    }
+    dispatch(clearError());
+    await dispatch(signupUser({ ...form, role: "traveler" }));
   };
 
   return (
@@ -36,10 +47,12 @@ export default function SignupTravel({ onSignup }) {
                 <input className="form-control" type="password" value={form.password} onChange={e=>setForm({...form, password:e.target.value})}/>
               </div>
               <div className="col-12 d-flex justify-content-end">
-                <button className="btn btn-danger" type="submit">Create account</button>
+                <button className="btn btn-danger" type="submit" disabled={loading}>
+                  {loading ? "Creating account..." : "Create account"}
+                </button>
               </div>
             </div>
-            {err && <div className="text-danger mt-2 small">{err}</div>}
+            {error && <div className="text-danger mt-2 small">{error}</div>}
           </form>
         </div>
       </div>

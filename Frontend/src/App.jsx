@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { api } from "./api";
+import { useAppDispatch, useAppSelector } from "./store/hooks";
+import { fetchUser, logoutUser } from "./store/authSlice";
+import { fetchBookings, fetchBookingStatus } from "./store/bookingsSlice";
 import Start from "./pages/Start";
 import Header from "./components/Header";
 import Login from "./pages/Login";
@@ -27,105 +29,93 @@ function toMillis(value, fallback) {
 
 
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [loaded, setLoaded] = useState(false);
-  const [conciergeBookings, setConciergeBookings] = useState([]);
-  const [primaryConciergeBooking, setPrimaryConciergeBooking] = useState(null);
+  const dispatch = useAppDispatch();
+  const { user, isAuthenticated, loading } = useAppSelector((state) => state.auth);
+  const { bookings, pendingRequests, acceptedRequests, canceledRequests } = useAppSelector((state) => state.bookings);
   const location = useLocation();
 
   useEffect(() => {
-    api.me().then(d => {
-      setUser(d.user);
-      setLoaded(true);
-    }).catch(() => setLoaded(true));
-  }, []);
+    dispatch(fetchUser());
+  }, [dispatch]);
 
   useEffect(() => {
+    if (isAuthenticated && user?.role === "traveler") {
+      dispatch(fetchBookings());
+      dispatch(fetchBookingStatus());
+    }
+  }, [dispatch, isAuthenticated, user]);
+
+  // Calculate concierge bookings from Redux state
+  const conciergeBookings = React.useMemo(() => {
     if (!user || user.role !== "traveler") {
-      setConciergeBookings([]);
-      setPrimaryConciergeBooking(null);
-      return;
+      return [];
     }
 
-    let cancelled = false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    const loadConciergeData = async () => {
-      try {
-        const historyPromise = api.getbookings().catch(() => []);
-        const statusPromise = api.getbookingStatus().catch(() => ({}));
-        const [historyRaw, statusRaw] = await Promise.all([historyPromise, statusPromise]);
+    const pending = pendingRequests.filter(b => {
+      if (!b.start_date) return false;
+      const startDate = new Date(b.start_date);
+      startDate.setHours(0, 0, 0, 0);
+      return startDate >= today;
+    });
 
-        if (cancelled) return;
+    const acceptedSorted = acceptedRequests.slice().sort(
+      (a, b) =>
+        toMillis(a?.start_date ?? a?.startDate, Number.MAX_SAFE_INTEGER) -
+        toMillis(b?.start_date ?? b?.startDate, Number.MAX_SAFE_INTEGER)
+    );
+    const pendingSorted = pending.slice().sort(
+      (a, b) =>
+        toMillis(a?.start_date ?? a?.startDate, Number.MAX_SAFE_INTEGER) -
+        toMillis(b?.start_date ?? b?.startDate, Number.MAX_SAFE_INTEGER)
+    );
+    const historySorted = bookings.slice().sort(
+      (a, b) =>
+        toMillis(a?.start_date ?? a?.startDate, 0) -
+        toMillis(b?.start_date ?? b?.startDate, 0)
+    );
 
-        const history = Array.isArray(historyRaw) ? historyRaw : [];
-        const pending = Array.isArray(statusRaw?.pendingRequests) ? statusRaw.pendingRequests : [];
-        const accepted = Array.isArray(statusRaw?.acceptedRequests) ? statusRaw.acceptedRequests : [];
-        const canceled = Array.isArray(statusRaw?.canceledRequests) ? statusRaw.canceledRequests : [];
-
-        const acceptedSorted = accepted.slice().sort(
-          (a, b) =>
-            toMillis(a?.start_date ?? a?.startDate, Number.MAX_SAFE_INTEGER) -
-            toMillis(b?.start_date ?? b?.startDate, Number.MAX_SAFE_INTEGER)
-        );
-        const pendingSorted = pending.slice().sort(
-          (a, b) =>
-            toMillis(a?.start_date ?? a?.startDate, Number.MAX_SAFE_INTEGER) -
-            toMillis(b?.start_date ?? b?.startDate, Number.MAX_SAFE_INTEGER)
-        );
-        const historySorted = history.slice().sort(
-          (a, b) =>
-            toMillis(a?.start_date ?? a?.startDate, 0) -
-            toMillis(b?.start_date ?? b?.startDate, 0)
-        );
-        const canceledSorted = canceled.slice();
-
-        const seen = new Set();
-        const combined = [];
-        const pushUnique = (arr) => {
-          arr.forEach((booking) => {
-            const key = booking?.booking_id ?? booking?.id;
-            if (!key || seen.has(key)) return;
-            seen.add(key);
-            combined.push(booking);
-          });
-        };
-
-        pushUnique(acceptedSorted);
-        pushUnique(pendingSorted);
-        pushUnique(historySorted);
-        pushUnique(canceledSorted);
-
-        setConciergeBookings(combined);
-        setPrimaryConciergeBooking(combined[0] || null);
-      } catch (err) {
-        console.error("Failed loading concierge data", err);
-        if (!cancelled) {
-          setConciergeBookings([]);
-          setPrimaryConciergeBooking(null);
-        }
-      }
+    const seen = new Set();
+    const combined = [];
+    const pushUnique = (arr) => {
+      arr.forEach((booking) => {
+        const key = booking?.booking_id ?? booking?.id;
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        combined.push(booking);
+      });
     };
 
-    loadConciergeData();
+    pushUnique(acceptedSorted);
+    pushUnique(pendingSorted);
+    pushUnique(historySorted);
+    pushUnique(canceledRequests);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
+    return combined;
+  }, [user, bookings, pendingRequests, acceptedRequests, canceledRequests]);
 
-  if (!loaded) return null;
-  const isAuthed = !!user;
-  // const isOwner
+  const primaryConciergeBooking = conciergeBookings[0] || null;
+
+  const handleLogout = async () => {
+    await dispatch(logoutUser());
+    window.location.replace("/");
+  };
+
+  if (loading) return null;
+  const isAuthed = isAuthenticated && !!user;
+
   return (
     <>
-      <Header user={user} onLogout={async () => { await api.logout(); setUser(null); window.location.replace("/"); }} />
+      <Header user={user} onLogout={handleLogout} />
       <div>
         <Routes> 
           <Route path="/" element={isAuthed ?<Profile />: <Start />} />
-          <Route path="/login" element={isAuthed ? <Navigate to="/dashboard" /> : <Login onLogin={setUser} />} />
-          <Route path="/signup" element={isAuthed ? <Navigate to="/dashboard" /> : <Signup onSignup={setUser} />} />
-          <Route path="/traveler/login" element={isAuthed ? <Navigate to="/search" /> : <LoginTravel onLogin={setUser} />} />
-          <Route path="/traveler/signup" element={isAuthed ? <Navigate to="/dashboard" /> : <SignupTravel onSignup={setUser} />} />          
+          <Route path="/login" element={isAuthed ? <Navigate to="/dashboard" /> : <Login />} />
+          <Route path="/signup" element={isAuthed ? <Navigate to="/dashboard" /> : <Signup />} />
+          <Route path="/traveler/login" element={isAuthed ? <Navigate to="/search" /> : <LoginTravel />} />
+          <Route path="/traveler/signup" element={isAuthed ? <Navigate to="/dashboard" /> : <SignupTravel />} />          
           <Route path="/dashboard" element={isAuthed ? <OwnerDashboard /> : <Navigate to="/login" state={{ from: location }} />} />
           <Route path="/profile" element={isAuthed ? <Profile /> : <Navigate to="/login" />} />
           <Route path="/properties" element={isAuthed ? <PropertiesList /> : <Navigate to="/login" />} />

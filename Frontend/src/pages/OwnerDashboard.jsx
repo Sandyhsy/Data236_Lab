@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from "react";
+import { useAppDispatch } from "../store/hooks";
+import { acceptBooking, cancelBooking } from "../store/bookingsSlice";
 import { api } from "../api";
 import BookingCard from "../components/BookingCard";
 
 export default function OwnerDashboard() {
+  const dispatch = useAppDispatch();
   // 1) Safe initial shape so .length exists
   const [stats, setStats] = useState({
     total_props: 0,
@@ -35,23 +38,21 @@ export default function OwnerDashboard() {
 
   const accept = async (b) => {
     try {
-      await api.acceptBooking(b.booking_id);
+      await dispatch(acceptBooking(b.booking_id));
       alert("Booking accepted");
+      await load(); // Reload dashboard data
     } catch (e) {
       alert(e.message || "Failed to accept booking");
-    } finally {
-      await load();
     }
   };
 
   const cancel = async (b) => {
     try {
-      await api.cancelBooking(b.booking_id);
+      await dispatch(cancelBooking(b.booking_id));
       alert("Booking cancelled");
+      await load(); // Reload dashboard data
     } catch (e) {
       alert(e.message || "Failed to cancel booking");
-    } finally {
-      await load();
     }
   };
 

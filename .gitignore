@@ -29,3 +29,6 @@ Backend/.env
 agentic/.env
 Frontend/.env
 __pycache__/
+jmeter-test/jmeter_report
+jmeter-test/jmeter
+jmeter-test/jmeter*

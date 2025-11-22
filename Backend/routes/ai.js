@@ -25,12 +25,16 @@ async function forwardJson(req, res, target, init = {}) {
     const isJson = contentType.includes("application/json");
     if (isJson) {
       const body = await response.json().catch(() => ({}));
+      if (response.status >= 400) {
+        console.log(`[AI Proxy] Error response (${response.status}):`, JSON.stringify(body, null, 2));
+      }
       res.status(response.status).json(body);
     } else {
       const body = await response.text();
       res.status(response.status).send(body);
     }
   } catch (err) {
+    console.error(`[AI Proxy] Fetch error:`, err.message);
     res.status(502).json({ error: err.message || String(err) });
   }
 }
@@ -38,6 +42,8 @@ async function forwardJson(req, res, target, init = {}) {
 // Proxy all POSTs under /api/ai/* -> agent /ai/*
 router.post(/.*/, async (req, res) => {
   const target = buildAgentUrl(req.path);
+  console.log(`[AI Proxy] Forwarding POST ${req.path} to ${target}`);
+  console.log(`[AI Proxy] Request body:`, JSON.stringify(req.body ?? {}, null, 2));
   await forwardJson(req, res, target, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

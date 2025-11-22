@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { fetchProperty } from "../store/propertiesSlice";
+import { createBooking, fetchFavorites, addFavorite } from "../store/bookingsSlice";
 import { api } from "../api";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -49,6 +52,11 @@ function PropertyCarousel({ photos, height = 320, radius = 8 }) {
 
 export default function Property() {
   const { id } = useParams();
+  const dispatch = useAppDispatch();
+  const { currentProperty, loading: propertyLoading } = useAppSelector((state) => state.properties);
+  const { createBookingLoading, createBookingError } = useAppSelector((state) => state.bookings);
+  const { user } = useAppSelector((state) => state.auth);
+  
   const [property, setProperty] = useState({
     name: "",
     type: "",
@@ -79,40 +87,44 @@ export default function Property() {
   }
 
   useEffect(() => {
-    async function init() {
-      const p = await api.getProperty(id);
-      // const d = await api.getBookedDates(id);
-      setProperty({
-        name: p.name || "",
-        type: p.type || "",
-        amenities: p.amenities || "",
-        pricing: p.price_per_night || "",
-        bedrooms: p.bedrooms ?? "",
-        bathrooms: p.bathrooms ?? "",
-        profile_picture: p.profile_picture || "",
-        first_image_url: p.first_image_url || "",
-        photos: Array.isArray(p.photos) ? p.photos : []
-      });
-      setGuestCount((prev) => Math.min(Math.max(1, prev || 1), Math.max(1, Number(p.bedrooms || 0) || 1)));
-      // setExcludeDates(Array.isArray(d) ? d : []);
+    if (id) {
+      dispatch(fetchProperty(id));
     }
-    init();
-  }, [id]);
+  }, [dispatch, id]);
+
+  useEffect(() => {
+    if (currentProperty) {
+      setProperty({
+        name: currentProperty.name || "",
+        type: currentProperty.type || "",
+        amenities: currentProperty.amenities || "",
+        pricing: currentProperty.price_per_night || "",
+        bedrooms: currentProperty.bedrooms ?? "",
+        bathrooms: currentProperty.bathrooms ?? "",
+        profile_picture: currentProperty.profile_picture || "",
+        first_image_url: currentProperty.first_image_url || "",
+        photos: Array.isArray(currentProperty.photos) ? currentProperty.photos : []
+      });
+      setGuestCount((prev) => Math.min(Math.max(1, prev || 1), Math.max(1, Number(currentProperty.bedrooms || 0) || 1)));
+    }
+  }, [currentProperty]);
 
   async function clickFavorite() {
-    const pid = Number(id)
-    const u = await api.TravelerMe();
-    const uid = Number(u.user_id)
+    if (!user || !id) return;
+    const pid = Number(id);
+    const uid = Number(user.user_id);
     try {
-      const resp = await api.addFavorite(pid, uid);
-      alert(resp.message)
+      await dispatch(addFavorite({ property_id: pid, user_id: uid }));
+      alert("Added to favorites!");
+      // Refresh favorites list
+      dispatch(fetchFavorites());
     } catch (e) {
       console.error("Favorite toggle failed", e);
+      alert("Failed to add to favorites");
     }
   }
 
   async function handleSubmitBooking() {
-
     if (startDate >= endDate) {
       alert("Check-out date must be after check-in date");
       return;
@@ -134,14 +146,14 @@ export default function Property() {
     }
 
     try {
-      await api.createBooking({
+      await dispatch(createBooking({
         property_id: Number(id),
         start_date: startDate,
         end_date: endDate,
-      });
+      }));
       alert("Booking request submitted");
     } catch (e) {
-      alert(`Booking failed: ${e.message}`);
+      alert(`Booking failed: ${e.message || createBookingError}`);
     }
   }
 
@@ -240,9 +252,11 @@ export default function Property() {
                 <div className="col-12 col-md-6">
                   <button className="btn btn-success mt-4"
                     onClick={handleSubmitBooking}
-                    disabled={!startDate || !endDate}
+                    disabled={!startDate || !endDate || createBookingLoading}
                     title={!startDate ? "Pick check-in first" : (!endDate ? "Pick check-out" : "Submit")}
-                  > reserve</button>
+                  > 
+                    {createBookingLoading ? "Submitting..." : "Reserve"}
+                  </button>
                 </div>
               </div>
 

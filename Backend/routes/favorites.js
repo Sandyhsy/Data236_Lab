@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { db, getNextSequence } from "../db.js";
+import { requireAuth } from "../middleware/requireAuth.js";
 
 const router = Router();
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   const { user_id } = req.session.user;
   const rows = await db.collection("favorites").aggregate([
     { $match: { traveler_id: user_id } },
@@ -48,10 +49,13 @@ router.get("/", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/", async (req, res) => {
-  const uid = req.session.user.user_id 
-  const pid = req.body.property_id
-  if (!uid || !pid) return res.status(400).json({ error: "user_id and property_id are required" });
+router.post("/", requireAuth, async (req, res) => {
+  const uid = req.session.user.user_id;
+  const pid = parseInt(req.body.property_id, 10);
+
+  if (!uid || Number.isNaN(pid)) {
+    return res.status(400).json({ error: "user_id and property_id are required" });
+  }
 
   const exists = await db.collection("favorites").findOne({
     traveler_id: uid,

@@ -1,47 +1,41 @@
-import React, { useEffect, useState } from "react";
-import { api } from "../api";
+import React, { useEffect, useMemo } from "react";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { fetchBookings, fetchBookingStatus } from "../store/bookingsSlice";
 import HistoryCard from "../components/HistoryCard";
 
-export default function OwnerDashboard() {
+export default function History() {
+  const dispatch = useAppDispatch();
+  const { bookings, pendingRequests, acceptedRequests, canceledRequests, loading } = useAppSelector((state) => state.bookings);
 
-  const [bookHistory, setHistory] = useState([]);
-  const [pendingRequests, setPendingRequests] = useState([]);
-  const [acceptedRequests, setAcceptedRequests] = useState([]);
-  const [canceledRequests, setCanceledRequests] = useState([]);
+  useEffect(() => {
+    dispatch(fetchBookings());
+    dispatch(fetchBookingStatus());
+  }, [dispatch]);
 
-  const load = async () => {
-    const h = await api.getbookings();
-    const historyData = Array.isArray(h) ? h : [];
-    setHistory(historyData);
+  // Filter pending requests to only show today onwards
+  const filteredPending = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return pendingRequests.filter(b => {
+      if (!b.start_date) return false;
+      const startDate = new Date(b.start_date);
+      startDate.setHours(0, 0, 0, 0);
+      return startDate >= today;
+    });
+  }, [pendingRequests]);
 
-    let pending = [];
-    let accepted = [];
-    let canceled = [];
 
-    try {
-      const d = await api.getbookingStatus();
-      // Filter pending requests to only show today onwards (double check on frontend)
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const allPending = Array.isArray(d?.pendingRequests) ? d.pendingRequests : [];
-      pending = allPending.filter(b => {
-        if (!b.start_date) return false;
-        const startDate = new Date(b.start_date);
-        startDate.setHours(0, 0, 0, 0);
-        return startDate >= today;
-      });
-      accepted = Array.isArray(d?.acceptedRequests) ? d.acceptedRequests : [];
-      canceled = Array.isArray(d?.canceledRequests) ? d.canceledRequests : [];
-    } catch (e) {
-      console.error("Dashboard load failed:", e);
-    }
-
-    setPendingRequests(pending);
-  	setAcceptedRequests(accepted);
-    setCanceledRequests(canceled);
-  };
-  useEffect(() => { load(); }, []);
-
+  if (loading) {
+    return (
+      <div className="container py-4">
+        <div className="text-center">
+          <div className="spinner-border" role="status">
+            <span className="visually-hidden">Loading...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container py-4">
@@ -53,8 +47,8 @@ export default function OwnerDashboard() {
             <div className="card-body">
               <div className="h6 fw-bold mb-3">Pending</div>
               <div className="row g-1">
-                {pendingRequests.length === 0 && <div className="text-secondary small">No Pending request yet.</div>}
-                {pendingRequests.map(b => (
+                {filteredPending.length === 0 && <div className="text-secondary small">No Pending request yet.</div>}
+                {filteredPending.map(b => (
                   <div className="col-12 col-md-6" key={b.booking_id}>
                     <HistoryCard b={b} />
                   </div>
@@ -101,8 +95,8 @@ export default function OwnerDashboard() {
             <div className="card-body">
               <div className="h6 fw-bold mb-3">Past trips</div>
               <div className="row g-1">
-                {bookHistory.length === 0 && <div className="text-secondary small">No history.</div>}
-                {bookHistory.map(b => (
+                {bookings.length === 0 && <div className="text-secondary small">No history.</div>}
+                {bookings.map(b => (
                   <div className="col-12 col-md-6" key={b.booking_id}>
                     <HistoryCard b={b} />
                   </div>

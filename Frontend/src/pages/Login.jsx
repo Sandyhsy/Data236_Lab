@@ -1,20 +1,31 @@
-import React, { useState } from "react";
-import { api } from "../api";
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { loginUser, clearError } from "../store/authSlice";
 
-export default function Login({ onLogin }) {
+export default function Login() {
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+  const { loading, error, isAuthenticated } = useAppSelector((state) => state.auth);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate("/dashboard");
+    }
+  }, [isAuthenticated, navigate]);
+
+  useEffect(() => {
+    return () => {
+      dispatch(clearError());
+    };
+  }, [dispatch]);
 
   const submit = async (e) => {
     e.preventDefault();
-    setErr("");
-    try {
-      const d = await api.login({ email, password, role:"owner"});
-      onLogin(d.user);
-    } catch (e) {
-      setErr(e.message);
-    }
+    dispatch(clearError());
+    await dispatch(loginUser({ email, password, role: "owner" }));
   };
 
   return (
@@ -29,9 +40,11 @@ export default function Login({ onLogin }) {
                 <input className="form-control" value={email} onChange={e=>setEmail(e.target.value)} placeholder="owner@example.com" />
                 <label className="form-label mt-3">Password</label>
                 <input className="form-control" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="********" />
-                {err && <div className="text-danger mt-2 small">{err}</div>}
+                {error && <div className="text-danger mt-2 small">{error}</div>}
                 <div className="mt-3 d-flex gap-2">
-                  <button className="btn btn-danger" type="submit">Login</button>
+                  <button className="btn btn-danger" type="submit" disabled={loading}>
+                    {loading ? "Logging in..." : "Login"}
+                  </button>
                 </div>
               </form>
             </div>

@@ -1,35 +1,40 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { fetchAllProperties, searchProperties } from "../store/propertiesSlice";
 import PropertyCardSearch from "../components/PropertyCardSearch";
 
 export default function PropertySearch() {
+  const dispatch = useAppDispatch();
+  const { allProperties, searchResults, loading, searchLoading } = useAppSelector((state) => state.properties);
   const [searchInput, setSearchInput] = useState({ location: "", start: "", end: "", guests: 1 });
-  const [items, setItems] = useState([]);
-  const load = async () => setItems(await api.loadAllProperties());
-  useEffect(() => { load(); }, []);
+  const [isSearching, setIsSearching] = useState(false);
+
+  useEffect(() => {
+    dispatch(fetchAllProperties());
+  }, [dispatch]);
 
   const update = (e) => {
     const { name, value } = e.target;
     setSearchInput((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = async (e) =>  {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsSearching(true);
     const payload = {
-        location: searchInput.location,
-        start: searchInput.start,
-        end: searchInput.end,
-        guests: Number(searchInput.guests),
-      };
-      try{
-      const lists = await api.searchProperty(payload);
-      setItems(Array.isArray(lists) ? lists : []);
-      }
-      catch (err){
-        console.error("failed to search properties", err)
-        setItems([])
-      }
-  }
+      location: searchInput.location,
+      start: searchInput.start,
+      end: searchInput.end,
+      guests: Number(searchInput.guests),
+    };
+    await dispatch(searchProperties(payload));
+    setIsSearching(false);
+  };
+
+  // Use search results if searching, otherwise use all properties
+  const items = isSearching || searchInput.location || searchInput.start || searchInput.end
+    ? searchResults
+    : allProperties;
 
   return (
     <div className="container py-4">
@@ -71,14 +76,26 @@ export default function PropertySearch() {
             value={searchInput.guests}
             onChange={update}
           />
-          <button type="submit" className="btn btn-primary w-100">
-            Search
+          <button type="submit" className="btn btn-primary w-100" disabled={searchLoading}>
+            {searchLoading ? "Searching..." : "Search"}
           </button>
         </div>
       </form>
       <div className="d-flex justify-content-between align-items-center mb-3">
         <h5 className="m-0">Find your next destination</h5>
       </div>
+      {(loading || searchLoading) && (
+        <div className="text-center py-4">
+          <div className="spinner-border" role="status">
+            <span className="visually-hidden">Loading...</span>
+          </div>
+        </div>
+      )}
+      {!loading && !searchLoading && items.length === 0 && (
+        <div className="text-center py-4 text-muted">
+          No properties found. Try adjusting your search criteria.
+        </div>
+      )}
       <div className="row g-3">
         {items.map(p => (
           <div className="col-12 col-md-6 col-lg-4" key={p.property_id}>
