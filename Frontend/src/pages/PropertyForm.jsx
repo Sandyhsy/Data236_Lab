@@ -129,23 +129,8 @@ export default function PropertyForm({ edit }) {
         // Edit mode: upload and persist immediately
         let working = [...urls];
         for (const file of Array.from(fileList)) {
-          const presign = await api.presignUpload({
-            property_id: Number(id),
-            filename: file.name,
-            contentType: file.type || "application/octet-stream"
-          });
-          
-          // 一定要用後端回傳的 contentType（和簽名一致）
-          const ct = presign.contentType || "image/jpeg";
-          
-          // 使用 putWithTimeout 確保不會卡太久
-          const putRes = await putWithTimeout(presign.uploadUrl, file, ct);
-          if (!putRes.ok) {
-            const txt = await putRes.text().catch(() => "");
-            throw new Error(`Upload failed for ${file.name}: ${putRes.status}${txt ? ` - ${txt}` : ""}`);
-          }
-          
-          working.push(presign.publicUrl);
+          const uploaded = await api.proxyPropertyUpload(file, Number(id));
+          working.push(uploaded.publicUrl || uploaded.url || uploaded.key || "");
           await syncUrlsToServer(Number(id), working);
           setImageText(working.join("\n"));
         }
@@ -155,22 +140,8 @@ export default function PropertyForm({ edit }) {
       // Create mode: upload to staging, show immediately
       const added = [];
       for (const file of Array.from(fileList)) {
-        const presign = await api.presignUploadTemp({
-          filename: file.name,
-          contentType: file.type || "application/octet-stream"
-        });
-        
-        // 一定要用後端回傳的 contentType（和簽名一致）
-        const ct = presign.contentType || "image/jpeg";
-        
-        // 使用 putWithTimeout 確保不會卡太久
-        const putRes = await putWithTimeout(presign.uploadUrl, file, ct);
-        if (!putRes.ok) {
-          const txt = await putRes.text().catch(() => "");
-          throw new Error(`Upload failed for ${file.name}: ${putRes.status}${txt ? ` - ${txt}` : ""}`);
-        }
-        
-        added.push(presign.publicUrl);
+        const uploaded = await api.proxyStagingUpload(file);
+        added.push(uploaded.publicUrl || uploaded.url || uploaded.key || "");
       }
       setStagedUrls(prev => [...prev, ...added]);
     } catch (e) {
