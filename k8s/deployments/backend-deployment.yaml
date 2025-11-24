@@ -32,6 +32,11 @@ spec:
             configMapKeyRef:
               name: services-config
               key: NODE_ENV
+        - name: AGENT_URL
+          valueFrom:
+            configMapKeyRef:
+              name: services-config
+              key: AGENT_URL
         - name: CLIENT_ORIGIN
           valueFrom:
             configMapKeyRef:
