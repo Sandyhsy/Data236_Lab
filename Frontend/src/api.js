@@ -1,4 +1,5 @@
-const BASE = process.env.REACT_APP_API_URL || "http://localhost:4000/api";
+// Use relative API path by default so the frontend calls the same host (ELB/ingress) that served it.
+const BASE = process.env.REACT_APP_API_URL || "/api";
 
 async function req(path, { method = "GET", body } = {}) {
   const res = await fetch(`${BASE}${path}`, {

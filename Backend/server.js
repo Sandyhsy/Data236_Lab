@@ -64,10 +64,23 @@ try {
   console.error("Failed to seed database:", err);
 }
 
-app.use(cors({
-  origin: process.env.CLIENT_ORIGIN || "http://localhost:3000",
+const allowAllCors = (process.env.ALLOW_ALL_CORS || "false").toLowerCase() === "true";
+const allowedOrigins = (process.env.CLIENT_ORIGIN || process.env.CLIENT_ORIGINS || "http://localhost:3000")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const corsOptions = {
+  origin: allowAllCors
+    ? true
+    : (origin, cb) => {
+        if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+        return cb(new Error("Not allowed by CORS"));
+      },
   credentials: true
-}));
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(session({
   secret: process.env.SESSION_SECRET || "dev_secret",
